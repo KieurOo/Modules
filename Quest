@@ -1,0 +1,1377 @@
+return function(Window, player, QuestTab, config)
+	local enableNoclip = config.enableNoclip
+	local disableNoclip = config.disableNoclip
+
+	local RunService = game:GetService("RunService")
+	local Players = game:GetService("Players")
+	local TweenService = game:GetService("TweenService")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local HttpService = game:GetService("HttpService")
+	local Stats = game:GetService("Stats")
+	local UserInputService = game:GetService("UserInputService")
+	local PhysicsService = game:GetService("PhysicsService")
+	local MarketplaceService = game:GetService("MarketplaceService")
+	local TeleportService = game:GetService("TeleportService")
+
+	local PlayerStats = player:WaitForChild("PlayerStats")
+	local PlayerLevel = PlayerStats:WaitForChild("Level")
+	local PlayerPity = PlayerStats:WaitForChild("PityCount")
+	local PlayerStand = PlayerStats:WaitForChild("Stand")
+	local PlayerPrestige = PlayerStats:WaitForChild("Prestige")
+	local PlayerSpec = PlayerStats:WaitForChild("Spec")
+	local PlayerMoney = PlayerStats:WaitForChild("Money")
+	local ClientFX = ReplicatedStorage:WaitForChild("ClientFX")
+	local Dialogues = workspace:WaitForChild("Dialogues")
+
+	local function GetPlayer()
+		return game.Players.LocalPlayer
+	end
+
+	local function GetCharacter()
+		return GetPlayer().Character or GetPlayer().CharacterAdded:Wait()
+	end
+
+	local function GetHRP()
+		local Character = GetCharacter()
+		return Character and Character:FindFirstChild("HumanoidRootPart")
+	end
+
+	local function HasStand()
+		local player = GetPlayer()
+		if player and player:FindFirstChild("PlayerStats") and player.PlayerStats:FindFirstChild("Stand") then
+			local standValue = player.PlayerStats.Stand.Value
+			if standValue ~= "None" and standValue ~= "" and standValue ~= nil then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function EquipStand()
+		local Character = GetCharacter()
+		if not Character then return end
+		local shouldEquip = getgenv().QuestMethod == "With Stand"
+		local hasStandSummoned = Character:FindFirstChild("SummonedStand") and Character.SummonedStand.Value
+		if Character:FindFirstChild("RemoteFunction") then
+			if shouldEquip and not hasStandSummoned then
+				pcall(function()
+					Character.RemoteFunction:InvokeServer("ToggleStand", "Toggle")
+				end)
+			elseif not shouldEquip and hasStandSummoned then
+				pcall(function()
+					Character.RemoteFunction:InvokeServer("ToggleStand", "Toggle")
+				end)
+			end
+		end
+	end
+
+local QuestInfo = {
+    ["Officer Sam [Lvl. 1+]"] = { Enemy = "Thug" },
+    ["Deputy Bertrude [Lvl. 10+]"] = { Enemy = "Corrupt Police" },
+    ["Abbacchio's Partner [Lvl 15+]"] = { Enemy = "Alpha Thug" },
+    ["Homeless Man Jill [Lvl. 15+]"] = { Item = "Gold Coin", Amount = 10 },
+    ["Dracula [Lvl. 20+]"] = { Enemy = "Zombie Henchman" },
+    ["William Zeppeli [Lvl. 25+]"] = { Enemy = "Vampire" },
+    ["Doppio [Lvl. 30+]"] = { Enemy = "DIO" },
+    ["DIO [Lvl. 35+]"] = { Enemy = "Jotaro" },
+}
+
+local function ParseQuests()
+    local parsed = {}
+    local seen = {}
+    local dialogues = workspace:FindFirstChild("Dialogues")
+    if dialogues then
+        for _, v in pairs(dialogues:GetChildren()) do
+            local name = v.Name
+            local lower = name:lower()
+            local isQuest = (lower:find("lvl") or name == "Jotaro")
+                and not lower:find("darius")
+                and not lower:find("pucci")
+                and not lower:find("kars")
+            if isQuest and not seen[name] then
+                seen[name] = true
+                table.insert(parsed, name)
+            end
+        end
+    end
+    for questName, _ in pairs(QuestInfo) do
+        if dialogues and dialogues:FindFirstChild(questName) and not seen[questName] then
+            seen[questName] = true
+            table.insert(parsed, questName)
+        end
+    end
+    table.sort(parsed)
+    return parsed
+end
+
+local ParsedQuests = ParseQuests()
+if workspace:FindFirstChild("Dialogues") then
+    workspace.Dialogues.ChildAdded:Connect(function(child)
+        if not child then return end
+        local name = child.Name
+        local lower = name:lower()
+        local isQuest = (lower:find("lvl") or name == "Jotaro")
+            and not lower:find("darius")
+            and not lower:find("pucci")
+            and not lower:find("kars")
+        if isQuest then
+            for _, existing in ipairs(ParsedQuests) do
+                if existing == name then return end
+            end
+            table.insert(ParsedQuests, name)
+            table.sort(ParsedQuests)
+            pcall(function()
+                if QuestDropdown and QuestDropdown.Refresh then
+                    QuestDropdown:Refresh(ParsedQuests)
+                elseif QuestDropdown and QuestDropdown.Set then
+                    QuestDropdown:Set(ParsedQuests[1] or "No quests available")
+                end
+            end)
+        end
+    end)
+end
+
+local function GetBestQuest()
+    local player = GetPlayer()
+    if not player or not player:FindFirstChild("PlayerStats") or not player.PlayerStats:FindFirstChild("Level") then
+        return nil
+    end
+    local playerLevel = player.PlayerStats.Level.Value
+    local bestQuest, highestReq = nil, -1
+    for _, questName in pairs(ParsedQuests) do
+        local levelReq = tonumber(questName:match("(%d+)"))
+        if levelReq and levelReq <= playerLevel and levelReq > highestReq then
+            highestReq = levelReq
+            bestQuest = questName
+        end
+    end
+    return bestQuest
+end
+
+local function GetPlayerLevel()
+    local player = GetPlayer()
+    if player and player:FindFirstChild("PlayerStats") and player.PlayerStats:FindFirstChild("Level") then
+        return player.PlayerStats.Level.Value
+    end
+    return 0
+end
+
+local function GetQuestLevelRequirement(questName)
+    if not questName then return 0 end
+    local levelReq = tonumber(questName:match("(%d+)"))
+    return levelReq or 0
+end
+
+local function GetAllNPCs()
+    local NPCs = {}
+    local seen = {}
+    for _, v in pairs(workspace.Living:GetChildren()) do
+        if v:FindFirstChild("Spawn") then
+            if not seen[v.Name] then
+                seen[v.Name] = true
+                table.insert(NPCs, v.Name)
+            end
+        end
+    end
+    table.sort(NPCs)
+    return NPCs
+end
+
+local function KillNPC(Enemy)
+	if not Enemy then return end
+	local enemyHRP = Enemy:FindFirstChild("HumanoidRootPart")
+	local enemyHumanoid = Enemy:FindFirstChildWhichIsA("Humanoid")
+	local enemyHealth = Enemy:FindFirstChild("Health")
+	if not (enemyHRP and enemyHumanoid and enemyHealth) or enemyHealth.Value <= 0 then
+		return
+	end
+
+	local oldPos
+	local hrp = GetHRP()
+	if hrp then oldPos = hrp.CFrame end
+
+	local FocusCam = nil
+
+	while Enemy and Enemy.Parent and enemyHRP and enemyHumanoid and enemyHealth and enemyHealth.Value > 0 do
+		if not getgenv().NPCFarmEnabled then break end
+
+		enemyHRP = Enemy:FindFirstChild("HumanoidRootPart")
+		enemyHumanoid = Enemy:FindFirstChildWhichIsA("Humanoid")
+		enemyHealth = Enemy:FindFirstChild("Health")
+		if not (enemyHRP and enemyHumanoid and enemyHealth) or enemyHealth.Value <= 0 then
+			task.wait(0.215)
+			break
+		end
+
+		local Character = GetPlayer().Character
+		local Humanoid = Character and Character:FindFirstChildWhichIsA("Humanoid")
+
+		if not (Character and Humanoid) or Humanoid.Health <= 0 then
+			pcall(function() if FocusCam then FocusCam:Destroy() end FocusCam = nil end)
+			pcall(function()
+				local Char = GetCharacter()
+				if Char and Char:FindFirstChild("FocusCam") then
+					Char.FocusCam:Destroy()
+				end
+			end)
+
+			GetPlayer().CharacterAdded:Wait()
+			task.wait(0.5)
+
+			pcall(enableNoclip)
+
+			if getgenv().QuestMethod == "With Stand" and HasStand() then
+				local newChar = GetCharacter()
+				if newChar and newChar:FindFirstChild("RemoteFunction") then
+					pcall(function()
+						newChar.RemoteFunction:InvokeServer("ToggleStand", "Toggle")
+					end)
+				end
+			end
+			task.wait(0.3)
+		else
+			local HRP = Character:FindFirstChild("HumanoidRootPart")
+			if not HRP then
+				task.wait(0.3)
+			else
+				if getgenv().QuestMethod == "With Stand" then
+					if not HasStand() then
+						getgenv().QuestMethod = "Without Stand"
+						pcall(function()
+							if QuestMethodDropdown and QuestMethodDropdown.Set then
+								QuestMethodDropdown:Set("Without Stand")
+							end
+						end)
+						Window:Notify("NPC Farm", "No stand detected! Auto-switched to Without Stand.", 3)
+					else
+						EquipStand()
+					end
+				else
+					EquipStand()
+				end
+
+				if Character:FindFirstChild("FocusCam") == nil then
+					FocusCam = Instance.new("ObjectValue", Character)
+					FocusCam.Name = "FocusCam"
+					FocusCam.Value = enemyHRP
+				else
+					local camVal = Character:FindFirstChild("FocusCam")
+					if camVal then camVal.Value = enemyHRP end
+				end
+
+				if GetPlayer().PlayerStats and GetPlayer().PlayerStats.Stand and GetPlayer().PlayerStats.Stand.Value ~= "None" and Character:FindFirstChild("StandMorph") and Character.StandMorph.PrimaryPart then
+					pcall(function()
+						Character.StandMorph.PrimaryPart.CFrame = enemyHRP.CFrame - enemyHRP.CFrame.LookVector * 1.1
+						if Character.PrimaryPart and Character.StandMorph.PrimaryPart then
+							Character.PrimaryPart.CFrame = Character.StandMorph.PrimaryPart.CFrame + Character.StandMorph.PrimaryPart.CFrame.LookVector * math.random(-3, -2) + Vector3.new(0, -35, 0)
+						end
+					end)
+				else
+					if Character.PrimaryPart then
+						pcall(function() Character.PrimaryPart.CFrame = enemyHRP.CFrame - enemyHRP.CFrame.LookVector * 2.3 end)
+					end
+				end
+
+				task.spawn(function() UseMove("m1") end)
+
+				local remote = Character:FindFirstChild("RemoteEvent")
+				if remote then
+					if game:GetService("CollectionService"):HasTag(Enemy, "Blocking") then
+						remote:FireServer("InputBegan", { Input = Enum.KeyCode.R })
+					end
+					local keys = getgenv().AutoUseStandSkillKeys or {"E"}
+					for _, keyName in ipairs(keys) do
+						local skillKey = keyName and Enum.KeyCode[keyName] or nil
+						if skillKey then
+							remote:FireServer("InputBegan", { Input = skillKey })
+						end
+					end
+				end
+			end
+		end
+
+		task.wait()
+	end
+
+	local hrp = GetHRP()
+	if hrp then
+		if Enemy and Enemy:FindFirstChild("HumanoidRootPart") then
+			hrp.CFrame = CFrame.new(Enemy.HumanoidRootPart.Position + Vector3.new(0, 20, 0))
+		elseif oldPos then
+			hrp.CFrame = oldPos + Vector3.new(0, 15, 0)
+		end
+		hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		hrp.Velocity = Vector3.new(0, 0, 0)
+	end
+
+	task.wait(math.max(0.01, getgenv().QuestDelay or 0.1))
+
+	pcall(function() if FocusCam then FocusCam:Destroy() end end)
+	pcall(function()
+		local Char = GetCharacter()
+		if Char and Char:FindFirstChild("FocusCam") then
+			Char.FocusCam:Destroy()
+		end
+	end)
+end
+local function GetBestQuestForLevel(currentLevel)
+    local bestQuest = nil
+    local highestReq = -1
+    for _, questName in pairs(ParsedQuests) do
+        if questName ~= "No quests available" then
+            local levelReq = GetQuestLevelRequirement(questName)
+            if levelReq and levelReq <= currentLevel and levelReq > highestReq then
+                highestReq = levelReq
+                bestQuest = questName
+            end
+        end
+    end
+    return bestQuest
+end
+
+local function CanTakeQuest(questName)
+    local playerLevel = GetPlayerLevel()
+    local questLevel = GetQuestLevelRequirement(questName)
+    return playerLevel >= questLevel
+end
+
+local function GetQuestState()
+    local player = GetPlayer()
+    if not player or not player:FindFirstChild("PlayerStats") then
+        return "none", nil, 0, 0
+    end
+
+    local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
+    local questProgress = player.PlayerStats:FindFirstChild("QuestProgress")
+    local questMax = player.PlayerStats:FindFirstChild("QuestMaxProgress")
+
+    if currentQuest and currentQuest.Value ~= "" and questProgress and questMax then
+        local progress = questProgress.Value or 0
+        local maxProgress = questMax.Value or 0
+        if maxProgress > 0 and progress >= maxProgress then
+            return "complete", currentQuest.Value, progress, maxProgress
+        end
+        return "active", currentQuest.Value, progress, maxProgress
+    end
+
+    return "none", nil, 0, 0
+end
+
+local function HasActiveQuest()
+    local state = GetQuestState()
+    return state == "active"
+end
+
+local function IsQuestComplete()
+    local state = GetQuestState()
+    return state == "complete"
+end
+
+local function GetCurrentQuestDisplayName()
+    local player = GetPlayer()
+    if player and player:FindFirstChild("PlayerStats") then
+        local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
+        if currentQuest and currentQuest.Value ~= "" then
+            return currentQuest.Value
+        end
+    end
+    if getgenv().SelectedQuest and getgenv().SelectedQuest ~= "" and getgenv().SelectedQuest ~= "No quests available" then
+        return getgenv().SelectedQuest
+    end
+    return nil
+end
+
+local function UpdateQuestStatusLabel()
+    local labelText = "No active quest"
+    local player = GetPlayer()
+    if not player or not player:FindFirstChild("PlayerStats") then
+        pcall(function()
+            if _G.QuestCurrentQuestLabelObj then
+                if _G.QuestCurrentQuestLabelObj.Set then
+                    _G.QuestCurrentQuestLabelObj:Set(labelText)
+                elseif _G.QuestCurrentQuestLabelObj.Text then
+                    _G.QuestCurrentQuestLabelObj.Text = labelText
+                end
+            end
+        end)
+        return
+    end
+
+    local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
+    if not currentQuest or currentQuest.Value == "" then
+        pcall(function()
+            if _G.QuestCurrentQuestLabelObj then
+                if _G.QuestCurrentQuestLabelObj.Set then
+                    _G.QuestCurrentQuestLabelObj:Set(labelText)
+                elseif _G.QuestCurrentQuestLabelObj.Text then
+                    _G.QuestCurrentQuestLabelObj.Text = labelText
+                end
+            end
+        end)
+        return
+    end
+
+    local questName = currentQuest.Value
+    local questProgress = player.PlayerStats:FindFirstChild("QuestProgress")
+    local questMax = player.PlayerStats:FindFirstChild("QuestMaxProgress")
+
+    local progress = 0
+    local maxProgress = 0
+    if questProgress then
+        progress = tonumber(questProgress.Value) or 0
+    end
+    if questMax then
+        maxProgress = tonumber(questMax.Value) or 0
+    end
+
+    if maxProgress > 0 then
+        local remaining = math.max(0, maxProgress - progress)
+        if remaining > 0 then
+            labelText = questName .. " | " .. tostring(progress) .. "/" .. tostring(maxProgress) .. " (" .. tostring(remaining) .. " left)"
+        else
+            labelText = questName .. " | " .. tostring(progress) .. "/" .. tostring(maxProgress) .. " | Finished"
+        end
+    else
+        labelText = questName .. " | Progress: " .. tostring(progress)
+    end
+
+    pcall(function()
+        if _G.QuestCurrentQuestLabelObj then
+            if _G.QuestCurrentQuestLabelObj.Set then
+                _G.QuestCurrentQuestLabelObj:Set(labelText)
+            elseif _G.QuestCurrentQuestLabelObj.Text then
+                _G.QuestCurrentQuestLabelObj.Text = labelText
+            end
+        end
+    end)
+end
+
+local function IsPlayerReady()
+    local player = GetPlayer()
+    if not player then return false end
+    local character = player.Character
+    if not character then return false end
+    local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+    if not humanoid then return false end
+    if humanoid.Health <= 0 then return false end
+    if not character:FindFirstChild("HumanoidRootPart") then return false end
+    if not character.PrimaryPart then return false end
+    return true
+end
+
+local function WaitForCharacter(timeout)
+    timeout = timeout or 10
+    local player = GetPlayer()
+    if not player then return false end
+    local start = tick()
+    while tick() - start < timeout do
+        if player.Character then
+            local humanoid = player.Character:FindFirstChildWhichIsA("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                return true
+            end
+        end
+        task.wait(0.1)
+    end
+    return false
+end
+
+local function clickThroughDialogue()
+    local plr = game:GetService("Players").LocalPlayer
+    local dialogueGui = plr.PlayerGui:FindFirstChild("DialogueGui")
+    local startTime = tick()
+    while dialogueGui and dialogueGui.Parent and tick() - startTime < 5 do
+        pcall(function()
+            local frame = dialogueGui:FindFirstChild("Frame")
+            if not frame then return end
+            local clickContinue = frame:FindFirstChild("ClickContinue")
+            if clickContinue then
+                for _, conn in pairs(getconnections(clickContinue.MouseButton1Click)) do
+                    conn:Fire()
+                end
+            end
+            local options = frame:FindFirstChild("Options")
+            if options then
+                local option1 = options:FindFirstChild("Option1")
+                if option1 then
+                    local textButton = option1:FindFirstChild("TextButton")
+                    if textButton then
+                        for _, conn in pairs(getconnections(textButton.MouseButton1Click)) do
+                            conn:Fire()
+                        end
+                    end
+                end
+            end
+        end)
+        task.wait(0.1)
+        dialogueGui = plr.PlayerGui:FindFirstChild("DialogueGui")
+    end
+end
+
+local function GetQuest(NPC)
+    if not NPC then return false end
+    local DialogueNameObj = NPC:FindFirstChild("Dialogue")
+    local Character = GetCharacter()
+    if not DialogueNameObj or not Character or not Character:FindFirstChild("RemoteEvent") then
+        return false
+    end
+
+    local DialogueName = DialogueNameObj.Value
+    local Event = Character:FindFirstChild("RemoteEvent")
+    local player = GetPlayer()
+
+    if NPC.Name == "DIO [Lvl. 35+]" then
+        pcall(function()
+            Event:FireServer("PromptTriggered", game:GetService("ReplicatedStorage"):WaitForChild("Dialogue"):WaitForChild("DIO"))
+        end)
+
+        local dlgStart = tick()
+        repeat
+            task.wait(0.1)
+        until player.PlayerGui:FindFirstChild("DialogueGui") or tick() - dlgStart > 3
+
+        clickThroughDialogue()
+
+        getgenv().CompletedQuest = false
+        return true
+    end
+
+    pcall(function()
+        Event:FireServer("DialogueInteracted", {
+            ["DialogueName"] = DialogueName,
+            ["Speaker"] = NPC.Name
+        })
+    end)
+
+    for dialogueNum = 1, 8 do
+        for optionNum = 1, 3 do
+            pcall(function()
+                Event:FireServer("EndDialogue", {
+                    ["NPC"] = DialogueName,
+                    ["Option"] = "Option" .. tostring(optionNum),
+                    ["Dialogue"] = "Dialogue" .. tostring(dialogueNum)
+                })
+            end)
+        end
+    end
+
+    local specialPatterns = {
+        {Dialogue = "Dialogue2", Option = "Option1"},
+        {Dialogue = "Dialogue4", Option = "Option1"},
+        {Dialogue = "Dialogue6", Option = "Option1"},
+        {Dialogue = "Dialogue2", Option = "Option2"},
+        {Dialogue = "Dialogue3", Option = "Option1"},
+        {Dialogue = "Dialogue5", Option = "Option1"},
+    }
+
+    for _, pattern in ipairs(specialPatterns) do
+        pcall(function()
+            Event:FireServer("EndDialogue", {
+                ["NPC"] = DialogueName,
+                ["Option"] = pattern.Option,
+                ["Dialogue"] = pattern.Dialogue
+            })
+        end)
+    end
+
+    getgenv().CompletedQuest = false
+    return true
+end
+
+local function TurnInQuest(NPC)
+    if not NPC then return false end
+    local DialogueNameObj = NPC:FindFirstChild("Dialogue")
+    local Character = GetCharacter()
+    if not DialogueNameObj or not Character or not Character:FindFirstChild("RemoteEvent") then
+        return false
+    end
+
+    local DialogueName = DialogueNameObj.Value
+    local Event = Character:FindFirstChild("RemoteEvent")
+    local plr = game:GetService("Players").LocalPlayer
+
+    if NPC.Name == "DIO [Lvl. 35+]" then
+        pcall(function()
+            Event:FireServer("PromptTriggered", game:GetService("ReplicatedStorage"):WaitForChild("Dialogue"):WaitForChild("DIO"))
+        end)
+        local dlgStart = tick()
+        repeat
+            task.wait(0.1)
+        until plr.PlayerGui:FindFirstChild("DialogueGui") or tick() - dlgStart > 3
+        clickThroughDialogue()
+        task.spawn(function()
+            Window:Notify("Quest", "Quest turned in: " .. NPC.Name, 2)
+        end)
+        return true
+    end
+
+    pcall(function()
+        Event:FireServer("DialogueInteracted", {
+            ["DialogueName"] = DialogueName,
+            ["Speaker"] = NPC.Name
+        })
+    end)
+
+    for dialogueNum = 1, 8 do
+        pcall(function()
+            Event:FireServer("EndDialogue", {
+                ["NPC"] = DialogueName,
+                ["Option"] = "Option1",
+                ["Dialogue"] = "Dialogue" .. tostring(dialogueNum)
+            })
+        end)
+    end
+
+    task.spawn(function()
+        Window:Notify("Quest", "Quest turned in: " .. NPC.Name, 2)
+    end)
+    return true
+end
+
+local function UseMove(Move)
+    local Character = GetCharacter()
+    if not Character then return end
+    if Move:lower() == "m1" or Move:lower() == "m2" then
+        if Character:FindFirstChild("RemoteFunction") then
+            pcall(function() Character.RemoteFunction:InvokeServer("Attack", Move) end)
+        end
+    end
+end
+
+local function KillEnemy(Enemy)
+	if not Enemy then return end
+	local enemyHRP = Enemy:FindFirstChild("HumanoidRootPart")
+	local enemyHumanoid = Enemy:FindFirstChildWhichIsA("Humanoid")
+	local enemyHealth = Enemy:FindFirstChild("Health")
+	if not (enemyHRP and enemyHumanoid and enemyHealth) or enemyHealth.Value <= 0 then
+		return
+	end
+
+	local oldPos
+	local hrp = GetHRP()
+	if hrp then oldPos = hrp.CFrame end
+
+	local FocusCam = nil
+
+	while Enemy and Enemy.Parent and enemyHRP and enemyHumanoid and enemyHealth and enemyHealth.Value > 0 do
+		if not getgenv().NPCFarmEnabled and not getgenv().QuestFarmEnabled then break end
+		if getgenv().QuestFarmEnabled then
+			local ply = GetPlayer()
+			if ply and ply:FindFirstChild("PlayerStats") and ply.PlayerStats:FindFirstChild("QuestProgress") and ply.PlayerStats:FindFirstChild("QuestMaxProgress") then
+				if ply.PlayerStats.QuestProgress.Value >= ply.PlayerStats.QuestMaxProgress.Value then
+					getgenv().CompletedQuest = true
+					break
+				end
+			end
+		end
+
+		enemyHRP = Enemy:FindFirstChild("HumanoidRootPart")
+		enemyHumanoid = Enemy:FindFirstChildWhichIsA("Humanoid")
+		enemyHealth = Enemy:FindFirstChild("Health")
+		if not (enemyHRP and enemyHumanoid and enemyHealth) or enemyHealth.Value <= 0 then
+			task.wait(0.215)
+			break
+		end
+
+		local Character = GetPlayer().Character
+		local Humanoid = Character and Character:FindFirstChildWhichIsA("Humanoid")
+
+		if not (Character and Humanoid) or Humanoid.Health <= 0 then
+			pcall(function() if FocusCam then FocusCam:Destroy() end FocusCam = nil end)
+			pcall(function()
+				local Char = GetCharacter()
+				if Char and Char:FindFirstChild("FocusCam") then
+					Char.FocusCam:Destroy()
+				end
+			end)
+
+			GetPlayer().CharacterAdded:Wait()
+			task.wait(0.5)
+
+			pcall(enableNoclip)
+
+			if getgenv().QuestMethod == "With Stand" then
+				if not HasStand() then
+					getgenv().QuestMethod = "Without Stand"
+					pcall(function()
+						if QuestMethodDropdown and QuestMethodDropdown.Set then
+							QuestMethodDropdown:Set("Without Stand")
+						end
+					end)
+					Window:Notify("Quest", "No stand detected! Auto-switched to Without Stand.", 3)
+				else
+					local newChar = GetCharacter()
+					if newChar and newChar:FindFirstChild("RemoteFunction") then
+						pcall(function()
+							newChar.RemoteFunction:InvokeServer("ToggleStand", "Toggle")
+						end)
+					end
+				end
+			end
+			task.wait(0.3)
+		else
+			local HRP = Character:FindFirstChild("HumanoidRootPart")
+			if not HRP then
+				task.wait(0.3)
+			else
+				if getgenv().QuestMethod == "With Stand" then
+					if not HasStand() then
+						getgenv().QuestMethod = "Without Stand"
+						pcall(function()
+							if QuestMethodDropdown and QuestMethodDropdown.Set then
+								QuestMethodDropdown:Set("Without Stand")
+							end
+						end)
+						Window:Notify("Quest", "No stand detected! Auto-switched to Without Stand.", 3)
+					else
+						EquipStand()
+					end
+				else
+					EquipStand()
+				end
+
+				if Character:FindFirstChild("FocusCam") == nil then
+					FocusCam = Instance.new("ObjectValue", Character)
+					FocusCam.Name = "FocusCam"
+					FocusCam.Value = enemyHRP
+				else
+					local camVal = Character:FindFirstChild("FocusCam")
+					if camVal then camVal.Value = enemyHRP end
+				end
+
+				if GetPlayer().PlayerStats and GetPlayer().PlayerStats.Stand and GetPlayer().PlayerStats.Stand.Value ~= "None" and Character:FindFirstChild("StandMorph") and Character.StandMorph.PrimaryPart then
+					pcall(function()
+						Character.StandMorph.PrimaryPart.CFrame = enemyHRP.CFrame - enemyHRP.CFrame.LookVector * 1.1
+						if Character.PrimaryPart and Character.StandMorph.PrimaryPart then
+							Character.PrimaryPart.CFrame = Character.StandMorph.PrimaryPart.CFrame + Character.StandMorph.PrimaryPart.CFrame.LookVector * math.random(-3, -2) + Vector3.new(0, -35, 0)
+						end
+					end)
+				else
+					if Character.PrimaryPart then
+						pcall(function() Character.PrimaryPart.CFrame = enemyHRP.CFrame - enemyHRP.CFrame.LookVector * 2.3 end)
+					end
+				end
+
+				task.spawn(function() UseMove("m1") end)
+
+				local remote = Character:FindFirstChild("RemoteEvent")
+				if remote then
+					if game:GetService("CollectionService"):HasTag(Enemy, "Blocking") then
+						remote:FireServer("InputBegan", { Input = Enum.KeyCode.R })
+					end
+
+					local keys = getgenv().AutoUseStandSkillKeys or {"E"}
+					for _, keyName in ipairs(keys) do
+						local skillKey = keyName and Enum.KeyCode[keyName] or nil
+						if skillKey then
+							remote:FireServer("InputBegan", { Input = skillKey })
+						end
+					end
+				end
+			end
+		end
+
+		task.wait()
+	end
+
+	local hrp = GetHRP()
+	if hrp then
+		if Enemy and Enemy:FindFirstChild("HumanoidRootPart") then
+			hrp.CFrame = CFrame.new(Enemy.HumanoidRootPart.Position + Vector3.new(0, 20, 0))
+		elseif oldPos then
+			hrp.CFrame = oldPos + Vector3.new(0, 15, 0)
+		end
+		hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		hrp.Velocity = Vector3.new(0, 0, 0)
+	end
+
+	task.wait(math.max(0.01, getgenv().QuestDelay or 0.1))
+
+	pcall(function() if FocusCam then FocusCam:Destroy() end end)
+	pcall(function()
+		local Char = GetCharacter()
+		if Char and Char:FindFirstChild("FocusCam") then
+			Char.FocusCam:Destroy()
+		end
+	end)
+end
+local function getRemoteFunction()
+    return GetCharacter():WaitForChild("RemoteFunction")
+end
+
+local function learnSkill(skill, treeType)
+    pcall(function()
+        getRemoteFunction():InvokeServer("LearnSkill", {
+            Skill = skill,
+            SkillTreeType = treeType,
+        })
+    end)
+end
+
+local SPEC_SKILLS = {
+    "Hamon Breathing","Lung Capacity I","Lung Capacity II","Lung Capacity III",
+    "Lung Capacity IV","Lung Capacity V","Breathing Technique I","Breathing Technique II",
+    "Breathing Technique III","Breathing Technique IV","Breathing Technique V",
+}
+
+local function learnAllSkills()
+    pcall(function()
+        local sst = player:FindFirstChild("StandSkillTree")
+        if sst then
+            for _, v in pairs(sst:GetChildren()) do
+                if not v.Value then
+                    learnSkill(v.Name, "Stand")
+                end
+            end
+        end
+        local info = getRemoteFunction():InvokeServer("ReturnSkillInfoInTree", {
+            Type   = "Stand",
+            Skills = { [19] = "Inhale" },
+        })
+        if info and info.Inhale and info.Inhale.AssignedKey ~= "L" then
+            getRemoteFunction():InvokeServer("AssignSkillKey", {
+                Type  = "Stand",
+                Key   = "Enum.KeyCode.L",
+                Skill = "Inhale",
+            })
+        end
+        for _, name in ipairs(SPEC_SKILLS) do
+            learnSkill(name, "Spec")
+        end
+    end)
+end
+
+local function getQuests()
+    local t = {}
+    local ok, questFrame = pcall(function()
+        return player.PlayerGui:WaitForChild("HUD")
+            :WaitForChild("Main")
+            :WaitForChild("Frames")
+            :WaitForChild("Quest")
+            :WaitForChild("Quests")
+    end)
+    if not ok then return t end
+    for _, v in pairs(questFrame:GetChildren()) do
+        if v.Name ~= "Sample" then t[v.Name] = true end
+    end
+    return t
+end
+
+local function getPity()
+    return PlayerPity.Value <= 0 and 1
+        or math.clamp(1 + PlayerPity.Value / 25, 0, 10)
+end
+
+local function roundTwo(n)
+    return math.floor(n * 100) / 100
+end
+QuestLeft = QuestTab:Section("Quest Farm", "Left", "swords")
+QuestRight = QuestTab:Section("Npc Farm", "Right", "sword")
+
+getgenv().QuestDelay = 0.6
+getgenv().QuestMethod = "With Stand"
+getgenv().CompletedQuest = true
+getgenv().QuestFarmEnabled = false
+getgenv().NPCFarmEnabled = false
+getgenv().NoStandNotified = false
+getgenv().TargetNPC = ""
+getgenv().SelectedQuest = nil
+getgenv().AutoUseStandSkillKey = "E"
+getgenv().LastQuestNotifyTime = 0
+getgenv().QuestNotifyCooldown = 5
+getgenv().PreviousQuest = nil
+
+QuestLeft:Slider("Delay (seconds)", false, 0.05, 2, 2, function(value)
+    getgenv().QuestDelay = tonumber(value) or 2
+end)
+
+if #ParsedQuests == 0 then
+    for questName, _ in pairs(QuestInfo) do
+        table.insert(ParsedQuests, questName)
+    end
+    table.sort(ParsedQuests)
+end
+if #ParsedQuests == 0 then
+    table.insert(ParsedQuests, "No quests available")
+end
+
+getgenv().AutoSelectBestQuest = true
+
+QuestDropdown = QuestLeft:Dropdown("Select Quest", ParsedQuests, ParsedQuests[1] or "No quests available", function(selected)
+    getgenv().SelectedQuest = selected
+    if selected and selected ~= "" and selected ~= "No quests available" then
+        Window:Notify("Quest", "Quest set to: " .. tostring(selected), 3)
+    end
+end)
+
+QuestLeft:Toggle("Auto Select Best Quest", true, function(state)
+    getgenv().AutoSelectBestQuest = state
+    if state then
+        Window:Notify("Quest", "Auto Select Best Quest enabled. Will auto-switch quests on level up.", 3)
+        local best = GetBestQuestForLevel(GetPlayerLevel())
+        if best then
+            getgenv().SelectedQuest = best
+            pcall(function()
+                if QuestDropdown and QuestDropdown.Set then
+                    QuestDropdown:Set(best)
+                end
+            end)
+        end
+    else
+        Window:Notify("Quest", "Auto Select Best Quest disabled.", 3)
+    end
+end)
+
+QuestLeft:Button("Refresh Quests", function()
+    local oldCount = #ParsedQuests
+    ParsedQuests = ParseQuests()
+    local newCount = #ParsedQuests
+    pcall(function()
+        if QuestDropdown and QuestDropdown.Refresh then
+            QuestDropdown:Refresh(ParsedQuests)
+        elseif QuestDropdown and QuestDropdown.Set and ParsedQuests[1] then
+            QuestDropdown:Set(ParsedQuests[1])
+        end
+    end)
+    Window:Notify("Quest", "Refreshed! Found " .. newCount .. " quest(s). (was " .. oldCount .. ")", 3)
+end)
+
+QuestMethodDropdown = QuestLeft:Dropdown("Method", {"With Stand", "Without Stand"}, "With Stand", function(selected)
+    getgenv().QuestMethod = selected
+    Window:Notify("Quest", "Method set to: " .. selected, 3)
+end)
+
+getgenv().AutoUseStandSkillKeys = {"E"}
+
+QuestLeft:MultiDropdown("Auto Use Stand Skill", {"B","C","E","F","G","H","I","J","K","L","M","N","O","P","T","U","V","X","Y","Z"}, {"E"}, function(selectedList, changedItem)
+    getgenv().AutoUseStandSkillKeys = selectedList
+    local count = #selectedList
+    Window:Notify("Quest", "Auto skill keys set: " .. table.concat(selectedList, ", ") .. " (" .. count .. " selected)", 3)
+    if count > 2 then
+        if hasUnlearnedStandSkills() then
+            Window:Notify("Quest", "More than 2 skills selected! Auto-learning all stand skills...", 3)
+            task.spawn(function()
+                pcall(function()
+                    getgenv().learnAllSkills()
+                end)
+            end)
+        else
+            Window:Notify("Quest", "All stand skills already learned! Skipping.", 3)
+        end
+    end
+end, true)
+
+QuestLeft:Toggle("Enable Quest Farm", false, function(value)
+    if value then
+        if getgenv().normalFarmOn or getgenv().afkFarmOn or getgenv().afkUnderneathFarmOn or getgenv().safePlaceFarmOn then
+            Window:Notify("Quest", "Item Farm is running! Disable it first.", 3)
+            return
+        end
+        if ribFarmRunning then
+            Window:Notify("Quest", "Rib Farm is running! Disable it first.", 3)
+            return
+        end
+        if getgenv().autoPrestigeEnabled or getgenv().autoPrestigeBusy then
+            Window:Notify("Quest", "Auto Storyline is running! Disable it first.", 3)
+            return
+        end
+        if getgenv().NPCFarmEnabled then
+            Window:Notify("Quest", "NPC Farm is running! Disable it first.", 3)
+            return
+        end
+        if standFarmEnabled or standFarmBusy then
+            standFarmEnabled = false
+            standFarmBusy = false
+            Window:Notify("Quest", "Auto-stopped Stand Farm to prevent conflict.", 3)
+            task.wait(0.5)
+        end
+    end
+    
+    getgenv().QuestFarmEnabled = value
+    UpdateQuestStatusLabel()
+    
+        if value then
+            task.spawn(function()
+                Window:Notify("Quest", "Quest Farm started!", 3)
+            end)
+            enableNoclip()
+
+            local player = GetPlayer()
+            if player and player:FindFirstChild("PlayerStats") then
+                local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
+                local questProgress = player.PlayerStats:FindFirstChild("QuestProgress")
+                local questMax = player.PlayerStats:FindFirstChild("QuestMaxProgress")
+
+                if currentQuest and currentQuest.Value ~= "" and questProgress and questMax then
+                    getgenv().SelectedQuest = currentQuest.Value
+                    if questProgress.Value >= questMax.Value then
+                        getgenv().CompletedQuest = true
+                        task.spawn(function()
+                            Window:Notify("Quest", "Quest complete! Will turn in and get new one.", 3)
+                        end)
+                    else
+                        getgenv().CompletedQuest = false
+                        task.spawn(function()
+                            Window:Notify("Quest", "Resuming quest: " .. currentQuest.Value, 3)
+                        end)
+                    end
+                else
+                    getgenv().CompletedQuest = true
+                end
+            end
+        task.spawn(function()
+            while getgenv().QuestFarmEnabled do
+                if not IsPlayerReady() then
+                    disableNoclip()
+                    repeat task.wait(0.5) until IsPlayerReady() or not getgenv().QuestFarmEnabled
+                    if not getgenv().QuestFarmEnabled then break end
+                    task.wait(2)
+                    if not getgenv().QuestFarmEnabled then break end
+                    enableNoclip()
+                    if getgenv().QuestMethod == "With Stand" and IsPlayerReady() then
+                        EquipStand()
+                    end
+                    continue
+                end
+                
+                local playerLevel = GetPlayerLevel()
+                UpdateQuestStatusLabel()
+
+                if getgenv().AutoSelectBestQuest then
+                    local bestQuest = GetBestQuestForLevel(playerLevel)
+                    if bestQuest and bestQuest ~= getgenv().SelectedQuest then
+                        getgenv().PreviousQuest = getgenv().SelectedQuest
+                        getgenv().SelectedQuest = bestQuest
+                        getgenv().CompletedQuest = true
+                        pcall(function()
+                            if QuestDropdown and QuestDropdown.Set then
+                                QuestDropdown:Set(bestQuest)
+                            end
+                        end)
+                        task.spawn(function()
+                            Window:Notify("Quest", "Switched to: " .. bestQuest, 3)
+                        end)
+                    end
+                elseif not HasActiveQuest() then
+                    if getgenv().SelectedQuest then
+                        local selectedLevel = GetQuestLevelRequirement(getgenv().SelectedQuest)
+                        if selectedLevel > playerLevel then
+                            local bestQuest = GetBestQuestForLevel(playerLevel)
+                            if bestQuest then
+                                getgenv().SelectedQuest = bestQuest
+                                getgenv().CompletedQuest = true
+                                task.spawn(function()
+                                    Window:Notify("Quest", "Auto-adjusted to: " .. bestQuest, 3)
+                                end)
+                            end
+                        end
+                    else
+                        local bestQuest = GetBestQuestForLevel(playerLevel)
+                        if bestQuest then
+                            getgenv().SelectedQuest = bestQuest
+                            getgenv().CompletedQuest = true
+                            task.spawn(function()
+                                Window:Notify("Quest", "Auto-selected: " .. bestQuest, 3)
+                            end)
+                        end
+                    end
+                end
+                
+                if getgenv().QuestMethod == "With Stand" then
+                    if playerLevel >= 3 and not HasStand() then
+                        getgenv().QuestMethod = "Without Stand"
+                        pcall(function()
+                            if QuestMethodDropdown and QuestMethodDropdown.Set then
+                                QuestMethodDropdown:Set("Without Stand")
+                            end
+                        end)
+                        Window:Notify("Quest", "No stand detected! Auto-switched to Without Stand.", 3)
+                    else
+                        if IsPlayerReady() then
+                            EquipStand()
+                        end
+                    end
+                end
+                
+                if IsQuestComplete() then
+                    getgenv().CompletedQuest = true
+                elseif HasActiveQuest() then
+                    getgenv().CompletedQuest = false
+                end
+
+                if getgenv().CompletedQuest then
+                    local questName = getgenv().SelectedQuest
+                    if not questName or questName == "" or questName == "No quests available" then
+                        local bestQuest = GetBestQuestForLevel(playerLevel)
+                        if bestQuest then
+                            questName = bestQuest
+                            getgenv().SelectedQuest = bestQuest
+                        else
+                            Window:Notify("Quest", "No available quests found!", 3)
+                            task.wait(2)
+                            continue
+                        end
+                    end
+
+                    if getgenv().PreviousQuest and getgenv().PreviousQuest ~= "" then
+                        local prevNPC = workspace:FindFirstChild("Dialogues") and workspace.Dialogues:FindFirstChild(getgenv().PreviousQuest)
+                        if prevNPC then
+                            pcall(function() TurnInQuest(prevNPC) end)
+                        end
+                        getgenv().PreviousQuest = nil
+                    end
+
+                    local questNPC = workspace:FindFirstChild("Dialogues") and workspace.Dialogues:FindFirstChild(questName)
+
+                    if questNPC then
+                        pcall(function() TurnInQuest(questNPC) end)
+                        pcall(function() GetQuest(questNPC) end)
+                        getgenv().CompletedQuest = false
+                        task.wait(1.2)
+                        continue
+                    else
+                        Window:Notify("Quest", "Quest NPC not found: " .. tostring(questName), 3)
+                        task.wait(1)
+                    end
+else
+                    local questName = getgenv().SelectedQuest
+                    local questData = QuestInfo[questName]
+                    
+                    if questData and questData.Enemy then
+                        local enemyName = questData.Enemy
+                    local living = workspace:FindFirstChild("Living")
+                    
+                    if living then
+                        local foundAny = false
+
+                        for _, v in pairs(living:GetChildren()) do
+                            if not getgenv().QuestFarmEnabled then break end
+                            if not IsPlayerReady() then break end
+                            if getgenv().CompletedQuest then break end
+
+                            if v.Name == enemyName and v:FindFirstChild("HumanoidRootPart") and v:FindFirstChild("Health") and v.Health.Value > 0 then
+                                foundAny = true
+                                pcall(function() KillEnemy(v) end)
+                            end
+                        end
+
+                        if not foundAny then
+                            task.wait(1.5)
+                        end
+                    end
+                    elseif questData and questData.Item then
+                        local itemName = questData.Item
+                        local requiredAmount = questData.Amount or 1
+                        
+                        local function CountItems()
+                            local current = 0
+                            local ply = GetPlayer()
+                            if not ply then return 0 end
+                            if ply:FindFirstChild("Backpack") then
+                                for _, it in pairs(ply.Backpack:GetChildren()) do
+                                    if it.Name == itemName then current = current + 1 end
+                                end
+                            end
+                            if ply.Character then
+                                for _, it in pairs(ply.Character:GetChildren()) do
+                                    if it.Name == itemName then current = current + 1 end
+                                end
+                            end
+                            return current
+                        end
+                        
+                        if CountItems() >= requiredAmount then
+                            getgenv().CompletedQuest = true
+                            Window:Notify("Quest", "Items collected! Turn in quest.", 3)
+                        else
+                            local spawns = workspace:FindFirstChild("Item_Spawns") and workspace.Item_Spawns:FindFirstChild("Items")
+                            if spawns then
+                                for _, v in pairs(spawns:GetChildren()) do
+                                    if not getgenv().QuestFarmEnabled then break end
+                                    if getgenv().CompletedQuest then break end
+                                    local prox = v:FindFirstChild("ProximityPrompt")
+                                    if prox and prox.ObjectText == itemName and v:FindFirstChild("PrimaryPart") then
+                                        pcall(function()
+                                            local HRP = GetHRP()
+                                            if HRP and v.PrimaryPart then
+                                                local OldCF = HRP.CFrame
+                                                HRP.CFrame = v.PrimaryPart.CFrame - Vector3.new(0, 10, 0)
+                                                task.wait(math.max(0.05, getgenv().QuestDelay))
+                                                fireproximityprompt(prox, 0, true)
+                                                task.wait(math.max(0.05, getgenv().QuestDelay))
+                                                HRP.CFrame = OldCF
+                                            end
+                                        end)
+                                        task.wait(math.max(0.05, getgenv().QuestDelay))
+                                    end
+                                end
+                            end
+                        end
+                    else
+                        Window:Notify("Quest", "Unknown quest type for: " .. tostring(questName), 3)
+                        task.wait(1)
+                    end
+                end
+                
+                task.wait(0.01)
+            end
+            
+            disableNoclip()
+            Window:Notify("Quest", "Quest Farm stopped!", 3)
+        end)
+    else
+        Window:Notify("Quest", "Quest Farm stopped!", 3)
+        getgenv().NoStandNotified = false
+        disableNoclip()
+    end
+end)
+
+local NPCList = GetAllNPCs()
+local NPCDropdown = QuestRight:Dropdown("Select NPC", NPCList, NPCList[1] or "", function(selected)
+    getgenv().TargetNPC = selected
+    Window:Notify("Target Set", "Now targeting: " .. selected, 3)
+end)
+
+workspace.Living.ChildAdded:Connect(function(child)
+    if child:FindFirstChild("Spawn") then
+        local exists = false
+        for _, name in ipairs(NPCDropdown.Options or {}) do
+            if name == child.Name then
+                exists = true
+                break
+            end
+        end
+        if not exists then
+            NPCDropdown:Add(child.Name)
+        end
+    end
+end)
+
+QuestRight:Toggle("Enable NPC Farm", false, function(state)
+    if state then
+        if getgenv().normalFarmOn or getgenv().afkFarmOn or getgenv().afkUnderneathFarmOn or getgenv().safePlaceFarmOn then
+            Window:Notify("NPC Farm", "Item Farm is running! Disable it first.", 3)
+            return
+        end
+        if ribFarmRunning then
+            Window:Notify("NPC Farm", "Rib Farm is running! Disable it first.", 3)
+            return
+        end
+        if getgenv().autoPrestigeEnabled or getgenv().autoPrestigeBusy then
+            Window:Notify("NPC Farm", "Auto Storyline is running! Disable it first.", 3)
+            return
+        end
+        if getgenv().QuestFarmEnabled then
+            Window:Notify("NPC Farm", "Quest Farm is running! Disable it first.", 3)
+            return
+        end
+        if standFarmEnabled or standFarmBusy then
+            standFarmEnabled = false
+            standFarmBusy = false
+            Window:Notify("NPC Farm", "Auto-stopped Stand Farm to prevent conflict.", 3)
+            task.wait(0.5)
+        end
+    end
+    getgenv().NPCFarmEnabled = state
+    if state then
+        if getgenv().TargetNPC == "" then
+            Window:Notify("Error", "Please select an NPC first!", 4)
+            getgenv().NPCFarmEnabled = false
+            return
+        end
+        Window:Notify("NPC Farm", "Started farming: " .. getgenv().TargetNPC, 3)
+        enableNoclip()
+        task.spawn(function()
+            while getgenv().NPCFarmEnabled do
+                if not IsPlayerReady() then
+                    disableNoclip()
+                    repeat task.wait(0.5) until IsPlayerReady() or not getgenv().NPCFarmEnabled
+                    if not getgenv().NPCFarmEnabled then break end
+                    task.wait(2)
+                    enableNoclip()
+                    continue
+                end
+                local TargetName = getgenv().TargetNPC
+                local FoundAny = false
+                for _, v in pairs(workspace.Living:GetChildren()) do
+                    if not getgenv().NPCFarmEnabled then break end
+                    if v.Name == TargetName and v:FindFirstChild("Health") and v.Health.Value > 0 then
+                        FoundAny = true
+                        pcall(function() KillNPC(v) end)
+                    end
+                end
+                if not FoundAny then
+                    task.wait(0.5)
+                end
+                task.wait(0.1)
+            end
+            disableNoclip()
+            Window:Notify("NPC Farm", "Stopped farming", 3)
+        end)
+    else
+        disableNoclip()
+        Window:Notify("NPC Farm", "Stopped farming", 3)
+    end
+end)
+
+local QuestStatusSection = QuestTab:Section("Quest Status", "Right", "activity")
+QuestStatusSection:Paragraph("Live Quest Tracker", Color3.fromRGB(140, 140, 140))
+_G.QuestCurrentQuestLabelObj = QuestStatusSection:Paragraph("No active quest", Color3.fromRGB(100, 255, 100))
+UpdateQuestStatusLabel()
+
+task.spawn(function()
+    local player = GetPlayer()
+    if not player then return end
+    local stats = player:WaitForChild("PlayerStats")
+    local currentQuest = stats:WaitForChild("CurrentQuest")
+    local questProgress = stats:WaitForChild("QuestProgress")
+    local questMax = stats:WaitForChild("QuestMaxProgress")
+
+    currentQuest.Changed:Connect(function()
+        task.wait(0.1)
+        pcall(UpdateQuestStatusLabel)
+    end)
+    questProgress.Changed:Connect(function()
+        task.wait(0.05)
+        pcall(UpdateQuestStatusLabel)
+    end)
+    questMax.Changed:Connect(function()
+        task.wait(0.05)
+        pcall(UpdateQuestStatusLabel)
+    end)
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        pcall(UpdateQuestStatusLabel)
+    end
+end)
+
+QuestLeft:Paragraph("Info's", Color3.fromRGB(50, 50, 50))
+
+QuestLeft:Button("Show Stats", function()
+    local statsText = "{Stand} " .. PlayerStand.Value .. " | {Level} " .. PlayerLevel.Value .. " | {Pity} " .. roundTwo(getPity()) .. " | {Money} $" .. PlayerMoney.Value .. " | {Spec} " .. PlayerSpec.Value
+    Window:Notify("Stats", statsText, 10)
+end)
+
+QuestLeft:Button("Show Active Quests", function()
+    local q = getQuests()
+    local s = ""
+    for name in pairs(q) do s = s .. name .. "\n" end
+    if s == "" then s = "No active quests." end
+    Window:Notify("Quests", s, 5)
+end)
+
+QuestLeft:Button("Learn All Stand Skills", function()
+    if getgenv().autoPrestigeEnabled or getgenv().autoPrestigeBusy then
+        Window:Notify("Skills", "Auto Storyline is running! Stop it first.", 5)
+        return
+    end
+    task.spawn(function()
+        learnAllSkills()
+        Window:Notify("Skills", "All stand skills learned.", 5)
+    end)
+end)
+
+end
