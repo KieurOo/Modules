@@ -1,0 +1,317 @@
+return function(Window, player)
+    local Players = game:GetService("Players")
+    local TweenService = game:GetService("TweenService")
+    
+    local VisualTab = Window:Tab("Visual", "eye")
+    
+    local itemESP = true
+    local espConnection
+    local itemNotifier = true
+    local notifierConnection = nil
+    local spectateEnabled = false
+    local selectedSpectatePlayer = nil
+    local spectateTween = nil
+    local spectateCharConn = nil
+    local spectateConnection = nil
+
+    local function addItemESP(v)
+        local itemPart = v:FindFirstChildOfClass("MeshPart") or v:FindFirstChildOfClass("Part")
+        local prox = v:FindFirstChild("ProximityPrompt")
+        if itemPart and prox and itemPart.Transparency < 1 then
+            local itemName = prox.ObjectText or "Unknown Item"
+            if not v:FindFirstChild("ItemESP") then
+                local hl = Instance.new("Highlight")
+                hl.Name = "ItemESP"
+                hl.FillTransparency = 0.7
+                hl.FillColor = Color3.fromRGB(0, 255, 0)
+                hl.OutlineTransparency = 0
+                hl.OutlineColor = Color3.fromRGB(255, 0, 0)
+                hl.Adornee = v
+                hl.Parent = v
+            end
+            if not v:FindFirstChild("ItemESPName") then
+                local bb = Instance.new("BillboardGui")
+                bb.Name = "ItemESPName"
+                bb.Adornee = itemPart
+                bb.Size = UDim2.new(0, 200, 0, 50)
+                bb.StudsOffset = Vector3.new(0, 3, 0)
+                bb.AlwaysOnTop = true
+                bb.Parent = v
+                local tl = Instance.new("TextLabel")
+                tl.Size = UDim2.new(1, 0, 1, 0)
+                tl.BackgroundTransparency = 1
+                tl.Text = itemName
+                tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+                tl.TextSize = 24
+                tl.TextStrokeTransparency = 0.5
+                tl.Font = Enum.Font.SourceSansBold
+                tl.Parent = bb
+            end
+        end
+    end
+
+    local function enableItemESP()
+        for _, v in pairs(game.Workspace.Item_Spawns.Items:GetChildren()) do
+            addItemESP(v)
+        end
+        espConnection = game.Workspace.Item_Spawns.Items.ChildAdded:Connect(function(v)
+            wait(0.1)
+            addItemESP(v)
+        end)
+    end
+
+    local function disableItemESP()
+        for _, v in pairs(game.Workspace.Item_Spawns.Items:GetChildren()) do
+            local hl = v:FindFirstChild("ItemESP")
+            if hl then hl:Destroy() end
+            local bb = v:FindFirstChild("ItemESPName")
+            if bb then bb:Destroy() end
+        end
+        if espConnection then
+            espConnection:Disconnect()
+        end
+    end
+
+    local function enableItemNotifier()
+        if notifierConnection then
+            notifierConnection:Disconnect()
+            notifierConnection = nil
+        end
+        notifierConnection = game.Workspace.Item_Spawns.Items.ChildAdded:Connect(function(v)
+            wait(0.1)
+            local prox = v:FindFirstChild("ProximityPrompt")
+            if prox then
+                local itemName = prox.ObjectText or "Unknown Item"
+                Window:Notify("Item Spawned", itemName .. " has spawned!", 5)
+            end
+        end)
+    end
+
+    local function disableItemNotifier()
+        if notifierConnection then
+            notifierConnection:Disconnect()
+            notifierConnection = nil
+        end
+    end
+
+    local function getSpectatePlayerNames()
+        local names = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player then
+                table.insert(names, p.Name)
+            end
+        end
+        if #names == 0 then
+            table.insert(names, "No players")
+        end
+        return names
+    end
+
+    local function spectateTarget(targetPlayer)
+        if not targetPlayer then return end
+        local char = targetPlayer.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local humanoid = char:FindFirstChildWhichIsA("Humanoid")
+        if not hrp or not humanoid or humanoid.Health <= 0 then return end
+        if spectateTween then
+            pcall(function() spectateTween:Cancel() end)
+            spectateTween = nil
+        end
+        if spectateConnection then
+            pcall(function() spectateConnection:Disconnect() end)
+            spectateConnection = nil
+        end
+        local localChar = player.Character
+        if not localChar then return end
+        local localHum = localChar:FindFirstChildWhichIsA("Humanoid")
+        if not localHum then return end
+        local FocusCam = localChar:FindFirstChild("FocusCam")
+        if not FocusCam then
+            FocusCam = Instance.new("ObjectValue", localChar)
+            FocusCam.Name = "FocusCam"
+        end
+        FocusCam.Value = hrp
+        local camera = workspace.CurrentCamera
+        camera.CameraSubject = localHum
+        camera.CameraType = Enum.CameraType.Custom
+    end
+
+    local function stopSpectating()
+        spectateEnabled = false
+        if spectateTween then
+            pcall(function() spectateTween:Cancel() end)
+            spectateTween = nil
+        end
+        if spectateCharConn then
+            pcall(function() spectateCharConn:Disconnect() end)
+            spectateCharConn = nil
+        end
+        if spectateConnection then
+            pcall(function() spectateConnection:Disconnect() end)
+            spectateConnection = nil
+        end
+        pcall(function()
+            local localChar = player.Character
+            if localChar and localChar:FindFirstChild("FocusCam") then
+                localChar.FocusCam:Destroy()
+            end
+            local localHum = localChar and localChar:FindFirstChildWhichIsA("Humanoid")
+            if localHum then
+                workspace.CurrentCamera.CameraSubject = localHum
+                workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            end
+        end)
+    end
+
+    local function trackSpectateCharacter(targetPlayer)
+        if spectateCharConn then
+            pcall(function() spectateCharConn:Disconnect() end)
+            spectateCharConn = nil
+        end
+        if not targetPlayer then return end
+        spectateCharConn = targetPlayer.CharacterAdded:Connect(function()
+            if spectateEnabled and selectedSpectatePlayer == targetPlayer then
+                task.wait(0.5)
+                spectateTarget(targetPlayer)
+            end
+        end)
+    end
+
+    player.CharacterAdded:Connect(function(char)
+        if spectateEnabled and selectedSpectatePlayer then
+            task.wait(0.5)
+            spectateTarget(selectedSpectatePlayer)
+        end
+    end)
+
+    local VisualLeft = VisualTab:Section("ESP & Notifier", "Left", "eye")
+    local VisualRight = VisualTab:Section("Spectate Player", "Right", "video")
+
+    VisualLeft:Toggle("Item ESP", true, function(state)
+        itemESP = state
+        if itemESP then
+            Window:Notify("Visual", "Item ESP enabled.", 3)
+            enableItemESP()
+        else
+            Window:Notify("Visual", "Item ESP disabled.", 3)
+            disableItemESP()
+        end
+    end)
+
+    VisualLeft:Toggle("Item Spawn Notifier", true, function(state)
+        itemNotifier = state
+        if itemNotifier then
+            Window:Notify("Visual", "Item Spawn Notifier enabled.", 3)
+            enableItemNotifier()
+        else
+            Window:Notify("Visual", "Item Spawn Notifier disabled.", 3)
+            disableItemNotifier()
+        end
+    end)
+
+    VisualRight:Paragraph("Search and select a player to spectate. Camera will smoothly tween to the target.", Color3.fromRGB(140, 140, 140))
+
+    local spectatePlayerList = getSpectatePlayerNames()
+    local spectateDropdown = nil
+    local spectateSearchText = ""
+
+    VisualRight:InputSmall("Search Player", "Type name...", function(value)
+        spectateSearchText = value or ""
+        if spectateSearchText == "" then return end
+        for _, name in ipairs(spectatePlayerList) do
+            if name:lower():find(spectateSearchText:lower(), 1, true) then
+                if spectateDropdown and spectateDropdown.Set then
+                    pcall(function() spectateDropdown:Set(name) end)
+                end
+                local newTarget = Players:FindFirstChild(name)
+                if newTarget then
+                    selectedSpectatePlayer = newTarget
+                    trackSpectateCharacter(newTarget)
+                    if spectateEnabled then
+                        spectateTarget(newTarget)
+                        Window:Notify("Spectate", "Now spectating: " .. name, 3)
+                    end
+                end
+                break
+            end
+        end
+    end)
+
+    spectateDropdown = VisualRight:Dropdown("Select Player", spectatePlayerList, spectatePlayerList[1] or "No players", function(selected)
+        if selected == "No players" then
+            selectedSpectatePlayer = nil
+            return
+        end
+        local newTarget = Players:FindFirstChild(selected)
+        if newTarget then
+            selectedSpectatePlayer = newTarget
+            trackSpectateCharacter(newTarget)
+            if spectateEnabled then
+                spectateTarget(newTarget)
+                Window:Notify("Spectate", "Now spectating: " .. selected, 3)
+            end
+        end
+    end)
+
+    VisualRight:Toggle("Spectate Player", false, function(state)
+        spectateEnabled = state
+        if state then
+            if selectedSpectatePlayer and selectedSpectatePlayer.Character then
+                trackSpectateCharacter(selectedSpectatePlayer)
+                spectateTarget(selectedSpectatePlayer)
+                Window:Notify("Spectate", "Spectating enabled for " .. selectedSpectatePlayer.Name, 3)
+            else
+                Window:Notify("Spectate", "No valid player selected! Please select a player first.", 3)
+            end
+        else
+            stopSpectating()
+            Window:Notify("Spectate", "Spectate disabled.", 3)
+        end
+    end)
+
+    VisualRight:Button("Goto Player", function()
+        if not selectedSpectatePlayer then
+            Window:Notify("Goto", "No player selected! Please select a player first.", 3)
+            return
+        end
+        local targetChar = selectedSpectatePlayer.Character
+        local targetHRP = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+        if not targetHRP then
+            Window:Notify("Goto", "Target player character not loaded!", 3)
+            return
+        end
+        local localChar = player.Character
+        local localHRP = localChar and localChar:FindFirstChild("HumanoidRootPart")
+        if not localHRP then
+            Window:Notify("Goto", "Your character is not loaded!", 3)
+            return
+        end
+        local targetPos = targetHRP.Position + Vector3.new(0, 3, 0)
+        localHRP.CFrame = CFrame.new(targetPos)
+        localHRP.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        localHRP.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        Window:Notify("Goto", "Teleported to " .. selectedSpectatePlayer.Name, 3)
+    end)
+
+    Players.PlayerAdded:Connect(function(p)
+        if p == player then return end
+        task.wait(1)
+        spectatePlayerList = getSpectatePlayerNames()
+        if spectateDropdown and spectateDropdown.Add then
+            pcall(function() spectateDropdown:Add(p.Name) end)
+        end
+    end)
+
+    Players.PlayerRemoving:Connect(function(p)
+        if p == selectedSpectatePlayer and spectateEnabled then
+            stopSpectating()
+            Window:Notify("Spectate", "Target player left. Spectate stopped.", 3)
+        end
+        task.wait(0.5)
+        spectatePlayerList = getSpectatePlayerNames()
+    end)
+
+    enableItemESP()
+    enableItemNotifier()
+end
