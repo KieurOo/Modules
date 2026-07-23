@@ -1,0 +1,115 @@
+return function(Window, player, NpcPlaceTab, travelToInstant, travelToTween)
+    getgenv().travelToInstant = travelToInstant or getgenv().travelToInstant
+    getgenv().travelToTween = travelToTween or getgenv().travelToTween
+
+    local N = {s = {}, d = nil, p = {}}
+    N.l = NpcPlaceTab:Section("Npc", "Left", "user")
+    N.r = NpcPlaceTab:Section("Place", "Right", "map-pin")
+
+    N.f = function()
+        N.s = {}
+        local e = {}
+        local c = workspace:FindFirstChild("Dialogues")
+        if c then
+            for _,v in pairs(c:GetChildren()) do
+                if v:FindFirstChild("Dialogue") and v:FindFirstChild("ProximityPrompt") and not e[v.Name] then
+                    e[v.Name] = true
+                    table.insert(N.s, v.Name)
+                end
+            end
+        end
+        table.sort(N.s)
+        if #N.s == 0 then table.insert(N.s, "No NPCs") end
+        return N.s
+    end
+
+    N.o = N.f()
+
+    N.m = N.l:Dropdown("NPC", N.o, N.o[1], function(x)
+        N.d = (x ~= "No NPCs") and x or nil
+    end, true)
+
+    N.g = function()
+        if not N.d or N.d == "No NPCs" then
+            Window:Notify("Npc", "Select an NPC first!", 3)
+            return
+        end
+        local c = workspace:FindFirstChild("Dialogues")
+        if not c then return end
+        local n = c:FindFirstChild(N.d)
+        if not n then return end
+        local p = n:FindFirstChildWhichIsA("BasePart") or n:FindFirstChildWhichIsA("MeshPart") or n.PrimaryPart
+        if not p then return end
+        local h = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not h then return end
+        local t = p.Position + Vector3.new(0, 3, 0)
+        local ti = travelToInstant or getgenv().travelToInstant
+        local tt = travelToTween or getgenv().travelToTween
+        if getgenv().MethionBypassLoaded and ti then
+            local o = getgenv().InstantMethod
+            getgenv().InstantMethod = "Up"
+            ti(CFrame.new(t))
+            getgenv().InstantMethod = o or "Up"
+            Window:Notify("Npc", "Goto " .. N.d .. " (Instant)", 3)
+        elseif tt then
+            tt(t, function() return true end)
+            Window:Notify("Npc", "Goto " .. N.d .. " (Tween)", 3)
+        else
+            Window:Notify("Npc", "Travel functions not available!", 3)
+        end
+    end
+
+    N.l:Button("Goto", N.g)
+
+    N.places = {
+        ["Eli's Pizzeria"] = Vector3.new(122.69, 6.03, 71.46),
+        ["The bar"] = Vector3.new(393.76, -31.44, -173.44),
+        ["Naples Accessories"] = Vector3.new(500.17, 0.89, -50.89),
+        ["The Arcade"] = Vector3.new(247.69, 1.83, -261.03),
+        ["Main Spawn"] = Vector3.new(-64.29, 0.01, -783.49),
+        ["Train Station"] = Vector3.new(-265.90, -5.02, 16.11),
+        ["The boss' Cafe'"] = Vector3.new(-511.37, -25.37, -175.21),
+        ["Merchants Keep"] = Vector3.new(-681.71, -25.43, -332.09),
+        ["Naples' Sewer"] = Vector3.new(-118.30, -33.49, 60.21),
+        ["Heaven Arena"] = Vector3.new(8553.44, -479.19, 8159.71),
+        ["The Tallest Peak"] = Vector3.new(-242.75, 284.20, 353.13),
+        ["Fountain"] = Vector3.new(446.50, 30.85, -283.28),
+        ["Diavolo's Mansion"] = Vector3.new(1136.51, 116.67, -137.72),
+    }
+
+    N.placeNames = {}
+    for name, _ in pairs(N.places) do
+        table.insert(N.placeNames, name)
+    end
+    table.sort(N.placeNames)
+
+    N.selectedPlace = N.placeNames[1]
+
+    N.placeDropdown = N.r:Dropdown("Place", N.placeNames, N.placeNames[1], function(selected)
+        N.selectedPlace = selected
+    end, true)
+
+    N.r:Button("Goto", function()
+        if not N.selectedPlace or not N.places[N.selectedPlace] then
+            Window:Notify("Place", "Select a place first!", 3)
+            return
+        end
+        local h = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not h then return end
+        local t = N.places[N.selectedPlace]
+        local ti = travelToInstant or getgenv().travelToInstant
+        local tt = travelToTween or getgenv().travelToTween
+        if getgenv().MethionBypassLoaded and ti then
+            local o = getgenv().InstantMethod
+            getgenv().InstantMethod = "Up"
+            ti(CFrame.new(t))
+            getgenv().InstantMethod = o or "Up"
+            Window:Notify("Place", "Goto " .. N.selectedPlace .. " (Instant)", 3)
+        elseif tt then
+            tt(t, function() return true end)
+            Window:Notify("Place", "Goto " .. N.selectedPlace .. " (Tween)", 3)
+        else
+            Window:Notify("Place", "Travel functions not available!", 3)
+        end
+    end)
+end
