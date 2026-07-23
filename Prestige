@@ -1,0 +1,1269 @@
+return function(Window, player, StorylineTab)
+    local LocalPlayer = player
+    local PlayerGui = player.PlayerGui
+    local Backpack = player.Backpack
+
+    local autoPrestigeEnabled = false
+    local autoPrestigeBusy = false
+    local autoPrestigeStatus = "Idle"
+
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local TeleportService = game:GetService("TeleportService")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local HttpService = game:GetService("HttpService")
+    local Stats = game:GetService("Stats")
+    local UserInputService = game:GetService("UserInputService")
+    local PhysicsService = game:GetService("PhysicsService")
+    local MarketplaceService = game:GetService("MarketplaceService")
+
+    local PlayerStats = LocalPlayer:WaitForChild("PlayerStats")
+    local PlayerLevel = PlayerStats:WaitForChild("Level")
+    local PlayerPity = PlayerStats:WaitForChild("PityCount")
+    local PlayerStand = PlayerStats:WaitForChild("Stand")
+    local PlayerPrestige = PlayerStats:WaitForChild("Prestige")
+    local PlayerSpec = PlayerStats:WaitForChild("Spec")
+    local PlayerMoney = PlayerStats:WaitForChild("Money")
+    local ClientFX = ReplicatedStorage:WaitForChild("ClientFX")
+    local Dialogues = workspace:WaitForChild("Dialogues")
+    local RIB_NAME = "Rib Cage of The Saint's Corpse"
+
+    local PlayerOwns2xInv = false
+    pcall(function()
+        PlayerOwns2xInv = MarketplaceService:UserOwnsGamePassAsync(LocalPlayer.UserId, 14597778)
+    end)
+
+    local noclipEnabled = false
+    local noclipConn = nil
+    local function enableNoclip()
+        if noclipEnabled then return end
+        local NOCLIP_PARTS = {
+            "HumanoidRootPart","Head","LeftArm","RightArm",
+            "LeftLeg","RightLeg","UpperTorso","LowerTorso","Torso",
+        }
+        noclipConn = RunService.Stepped:Connect(function()
+            local c = LocalPlayer.Character
+            if not c then return end
+            for _, name in ipairs(NOCLIP_PARTS) do
+                local p = c:FindFirstChild(name)
+                if p and p:IsA("BasePart") then p.CanCollide = false end
+            end
+        end)
+        noclipEnabled = true
+    end
+
+    local function disableNoclip()
+        if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+        noclipEnabled = false
+    end
+
+    local function getCharacter()
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            return LocalPlayer.Character
+        end
+        return LocalPlayer.CharacterAdded:Wait()
+    end
+
+    local function getRootPart()
+        return getCharacter():WaitForChild("HumanoidRootPart")
+    end
+
+    local function getHumanoid()
+        return getCharacter():FindFirstChildWhichIsA("Humanoid")
+    end
+
+    local function getRemoteEvent()
+        return getCharacter():WaitForChild("RemoteEvent")
+    end
+
+    local function getRemoteFunction()
+        return getCharacter():WaitForChild("RemoteFunction")
+    end
+
+    local function unequipAllTools()
+        pcall(function() getHumanoid():UnequipTools() end)
+    end
+
+    local function waitUntilNewChar()
+        local newChar = LocalPlayer.CharacterAdded:Wait()
+        newChar:WaitForChild("HumanoidRootPart")
+        newChar:WaitForChild("Humanoid")
+    end
+
+    local function waitUntilNewCharAuto(timeoutSec)
+        local current = LocalPlayer.Character
+        local deadline = tick() + (timeoutSec or 20)
+        while autoPrestigeEnabled and tick() < deadline do
+            local char = LocalPlayer.Character
+            if char and char ~= current
+                and char:FindFirstChild("HumanoidRootPart")
+                and char:FindFirstChildWhichIsA("Humanoid")
+                and char:FindFirstChild("RemoteEvent")
+                and char:FindFirstChild("RemoteFunction") then
+                return true
+            end
+            task.wait(0.2)
+        end
+        return false
+    end
+
+    local function getPing()
+        local ok, v = pcall(function()
+            return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 100
+        end)
+        return ok and v or 50
+    end
+
+    local function getQuests()
+        local t = {}
+        local ok, questFrame = pcall(function()
+            return PlayerGui:WaitForChild("HUD")
+                :WaitForChild("Main")
+                :WaitForChild("Frames")
+                :WaitForChild("Quest")
+                :WaitForChild("Quests")
+        end)
+        if not ok then return t end
+        for _, v in pairs(questFrame:GetChildren()) do
+            if v.Name ~= "Sample" then t[v.Name] = true end
+        end
+        return t
+    end
+
+    local function getPity()
+        return PlayerPity.Value <= 0 and 1
+            or math.clamp(1 + PlayerPity.Value / 25, 0, 10)
+    end
+
+    local function roundTwo(n)
+        return math.floor(n * 100) / 100
+    end
+
+    local function fireDialogue(npc, dialogue, option)
+        pcall(function()
+            getRemoteEvent():FireServer("EndDialogue", {
+                NPC      = npc,
+                Dialogue = dialogue,
+                Option   = option,
+            })
+        end)
+    end
+
+    local function learnSkill(skill, treeType)
+        pcall(function()
+            getRemoteFunction():InvokeServer("LearnSkill", {
+                Skill        = skill,
+                SkillTreeType = treeType,
+            })
+        end)
+    end
+
+    local function getItemStackMax(itemName)
+        local ok, fl = pcall(function()
+            return require(ReplicatedStorage.Modules.FunctionLibrary)
+        end)
+        if ok and fl and fl.DroppableItems and fl.DroppableItems[itemName] and fl.DroppableItems[itemName].Max then
+            return fl.DroppableItems[itemName].Max
+        end
+        return maxLimits[itemName] or 999
+    end
+
+    local function getStandMorph()
+        return getCharacter():FindFirstChild("StandMorph")
+    end
+
+    local function desummonStand()
+        if getStandMorph() then
+            pcall(function()
+                getRemoteFunction():InvokeServer("ToggleStand", "Toggle")
+            end)
+            task.wait(0.5)
+        end
+    end
+
+    local function summonStand()
+        if not getStandMorph() then
+            pcall(function()
+                getRemoteFunction():InvokeServer("ToggleStand", "Toggle")
+            end)
+            task.wait(0.12)
+        end
+    end
+
+    local function toggleStand()
+        pcall(function()
+            getRemoteFunction():InvokeServer("ToggleStand", "Toggle")
+        end)
+    end
+
+    local function teleportUp()
+        local hrp = getRootPart()
+        local fallY = workspace.FallenPartsDestroyHeight
+        local p = hrp.Position
+        if p.Y < fallY + 100 then
+            hrp.Position = Vector3.new(p.X, fallY + 180, p.Z)
+        end
+        hrp.Anchored                = true
+        hrp.AssemblyLinearVelocity  = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        local pad = Instance.new("Part")
+        pad.Name         = tostring(math.random(1, 6764))
+        pad.Anchored     = true
+        pad.Size         = Vector3.new(150, 1, 150)
+        pad.Transparency = 1
+        pad.CFrame       = hrp.CFrame * CFrame.new(0, 200, 0)
+        pad.Parent       = workspace
+        hrp.CFrame       = pad.CFrame * CFrame.new(0, 6, 0)
+        hrp.Anchored     = false
+        task.delay(15, function() pad:Destroy() end)
+    end
+
+    local function hasStandSkill(skillName)
+        local node = LocalPlayer:FindFirstChild("StandSkillTree")
+        if not node then return false end
+        local skill = node:FindFirstChild(skillName)
+        return skill and skill.Value or false
+    end
+
+    local function hasSpecSkill(skillName)
+        local node = LocalPlayer:FindFirstChild("SpecSkillTree")
+        if not node then return nil end
+        local skill = node:FindFirstChild(skillName)
+        return skill and skill.Value or nil
+    end
+
+    local function setStatus(s)
+        autoPrestigeStatus = s
+    end
+
+    local BLACKLISTED_STANDS = {
+        "Six Pistols",
+        "Hermit Purple",
+        "Aerosmith",
+        "Beach Boy",
+        "Mr. President",
+        "White Album",
+        "Anubis",
+        "Tusk ACT 1",
+    }
+
+    local function isBlacklistedStand(standName)
+        if not standName or standName == "" then return false end
+        local lower = string.lower(standName)
+        for _, name in ipairs(BLACKLISTED_STANDS) do
+            if string.lower(name) == lower then
+                return true
+            end
+        end
+        return false
+    end
+
+    local STORY_NPCS = {
+        { quest = "Help Giorno by Defeating Security Guards", npc = "Security Guard", offZ = 2, offY = 20 },
+        { quest = "Defeat Leaky Eye Luca",                    npc = "Leaky Eye Luca", offZ = 2, offY = 20 },
+        { quest = "Defeat Bucciarati",                        npc = "Bucciarati",     offZ = 2, offY = 20 },
+        { quest = "Defeat Fugo And His Purple Haze",          npc = "Fugo",           offZ = 2, offY = 20 },
+        { quest = "Defeat Pesci",                             npc = "Pesci",          offZ = 0, offY = 20 },
+        { quest = "Defeat Ghiaccio",                          npc = "Ghiaccio",       offZ = 2, offY = 20 },
+        { quest = "Defeat Diavolo",                           npc = "Diavolo",        offZ = 2, offY = 20 },
+    }
+    local VAMPIRE_QUEST     = "Take down 3 vampires"
+    local VAMPIRE_OFFZ      = 0
+    local VAMPIRE_OFFY      = 14
+    local VAMPIRE_LVL_GATE  = 25
+    local NO_KILL_WARN_TIMEOUT = 240
+
+    local STORYLINE_KEYS = {
+        "#1","#1","#1","#2","#3","#3","#3","#4",
+        "#5","#6","#7","#8","#9","#10","#11","#11","#12","#14",
+    }
+    local STORYLINE_DLG = {
+        "Dialogue2","Dialogue6","Dialogue6","Dialogue3","Dialogue3","Dialogue3","Dialogue6","Dialogue3",
+        "Dialogue5","Dialogue5","Dialogue5","Dialogue4","Dialogue7","Dialogue6","Dialogue8","Dialogue11","Dialogue3","Dialogue2",
+    }
+
+    local function fireStorylineSweep()
+        for i = 1, 18 do
+            fireDialogue("Storyline " .. STORYLINE_KEYS[i], STORYLINE_DLG[i], "Option1")
+            task.wait(0.08)
+        end
+    end
+
+    local function aggressiveStorylineAdvance(timeoutSec)
+        timeoutSec = timeoutSec or 15
+        local deadline = tick() + timeoutSec
+        while autoPrestigeEnabled and tick() < deadline do
+            local char = LocalPlayer.Character
+            local humanoid = char and char:FindFirstChildWhichIsA("Humanoid")
+            if not char or not humanoid or humanoid.Health <= 0 then
+                return false
+            end
+            local quests = getQuests()
+            if next(quests) ~= nil then
+                return true
+            end
+            local remoteEvent = getRemoteEvent()
+            for i = 1, 18 do
+                if not autoPrestigeEnabled then return false end
+                local key = STORYLINE_KEYS[i]
+                pcall(function()
+                    remoteEvent:FireServer("DialogueInteracted", {
+                        ["DialogueName"] = "Storyline " .. key,
+                        ["Speaker"] = "Storyline " .. key
+                    })
+                end)
+                task.wait(0.05)
+                fireDialogue("Storyline " .. key, STORYLINE_DLG[i], "Option1")
+                task.wait(0.08)
+            end
+            for i = 1, 14 do
+                if not autoPrestigeEnabled then return false end
+                pcall(function()
+                    remoteEvent:FireServer("DialogueInteracted", {
+                        ["DialogueName"] = "Storyline #" .. i,
+                        ["Speaker"] = "Storyline #" .. i
+                    })
+                end)
+                task.wait(0.05)
+                fireDialogue("Storyline #" .. i, "Dialogue2", "Option1")
+                task.wait(0.05)
+            end
+            task.wait(0.5)
+        end
+        return next(getQuests()) ~= nil
+    end
+
+    local SPEC_SKILLS = {
+        "Lung Capacity I","Lung Capacity II","Lung Capacity III",
+        "Lung Capacity IV","Lung Capacity V","Breathing Technique I","Breathing Technique II",
+        "Breathing Technique III","Breathing Technique IV","Breathing Technique V",
+    }
+
+    local CAESAR_SKILLS = {
+        "Bubble Launcher",
+        "Breathing Technique I",
+    }
+
+    local function isCaesarSpec()
+        if string.find(string.lower(PlayerSpec.Value or ""), "caesar") then return true end
+        local char = getCharacter()
+        if char and char:FindFirstChild("Caesar's Headband") then return true end
+        if Backpack:FindFirstChild("Caesar's Headband") then return true end
+        return false
+    end
+
+    local function learnAllSkills()
+        pcall(function()
+            local sst = LocalPlayer:FindFirstChild("StandSkillTree")
+            if sst then
+                local standName = PlayerStand.Value
+                if standName == "King Crimson" or standName == "King Crimson Requiem" or standName == "King Crimson: Requiem" then
+                    local toBuy = {}
+                    for _, v in pairs(sst:GetChildren()) do
+                        local nameLower = string.lower(v.Name)
+                        if string.find(nameLower, "destructive power") or nameLower == "chop" then
+                            table.insert(toBuy, v)
+                        end
+                    end
+                    table.sort(toBuy, function(a, b) return a.Name < b.Name end)
+                    for _, v in ipairs(toBuy) do
+                        if not v.Value then
+                            learnSkill(v.Name, "Stand")
+                            task.wait(0.05)
+                        end
+                    end
+                elseif standName == "Star Platinum: The World" or standName == "Star Platinum The World" then
+                    local toBuy = {}
+                    for _, v in pairs(sst:GetChildren()) do
+                        local nameLower = string.lower(v.Name)
+                        if string.find(nameLower, "destructive power") or string.find(nameLower, "precision") or nameLower == "ora kicks" or nameLower == "bearing shot" or nameLower == "ora beatdown" then
+                            table.insert(toBuy, v)
+                        end
+                    end
+                    table.sort(toBuy, function(a, b) return a.Name < b.Name end)
+                    for _, v in ipairs(toBuy) do
+                        if not v.Value then
+                            learnSkill(v.Name, "Stand")
+                            task.wait(0.05)
+                        end
+                    end
+                else
+                    for _, v in pairs(sst:GetChildren()) do
+                        if not v.Value then
+                            learnSkill(v.Name, "Stand")
+                        end
+                    end
+                end
+            end
+            if PlayerStand.Value == "Star Platinum" then
+                local info = getRemoteFunction():InvokeServer("ReturnSkillInfoInTree", {
+                    Type   = "Stand",
+                    Skills = { [19] = "Inhale" },
+                })
+                if info and info.Inhale and info.Inhale.AssignedKey ~= "L" then
+                    getRemoteFunction():InvokeServer("AssignSkillKey", {
+                        Type  = "Stand",
+                        Key   = "Enum.KeyCode.L",
+                        Skill = "Inhale",
+                    })
+                end
+            elseif PlayerStand.Value == "Star Platinum: The World" or PlayerStand.Value == "Star Platinum The World" then
+                local info = getRemoteFunction():InvokeServer("ReturnSkillInfoInTree", {
+                    Type   = "Stand",
+                    Skills = { [19] = "Ora Beatdown" },
+                })
+                if info and info["Ora Beatdown"] and info["Ora Beatdown"].AssignedKey ~= "L" then
+                    getRemoteFunction():InvokeServer("AssignSkillKey", {
+                        Type  = "Stand",
+                        Key   = "Enum.KeyCode.L",
+                        Skill = "Ora Beatdown",
+                    })
+                end
+            end
+            if isCaesarSpec() then
+                for _, name in ipairs(CAESAR_SKILLS) do
+                    learnSkill(name, "Spec")
+                    task.wait(0.05)
+                end
+            else
+                for _, name in ipairs(SPEC_SKILLS) do
+                    learnSkill(name, "Spec")
+                    task.wait(0.05)
+                end
+            end
+        end)
+    end
+
+    local function learnAllSpecSkills()
+        if isCaesarSpec() then
+            for _, name in ipairs(CAESAR_SKILLS) do
+                learnSkill(name, "Spec")
+                task.wait(0.05)
+            end
+        else
+            for _, name in ipairs(SPEC_SKILLS) do
+                learnSkill(name, "Spec")
+                task.wait(0.05)
+            end
+        end
+    end
+
+    local function canPrestigeNow()
+        return (PlayerLevel.Value >= 35 and PlayerPrestige.Value == 0)
+            or (PlayerLevel.Value >= 40 and PlayerPrestige.Value == 1)
+            or (PlayerLevel.Value >= 45 and PlayerPrestige.Value == 2)
+    end
+
+    local function getSkillOnKey(char, keyName)
+        local stack = char and char:FindFirstChild("StandSkills")
+        if not stack then return nil end
+        local node = stack:FindFirstChild("Enum.KeyCode." .. keyName)
+        return node and node.Value or nil
+    end
+
+    local function isSkillOnCooldown(skillName)
+        if not skillName or skillName == "" then return false end
+        local hud = PlayerGui:FindFirstChild("HUD")
+        if not hud then return false end
+        local cd = hud:FindFirstChild("Cooldowns")
+        if not cd then return false end
+        local frame = cd:FindFirstChild("Frame")
+        if not frame then return false end
+        return frame:FindFirstChild(skillName) ~= nil
+    end
+
+    local KILL_SKILL_PATTERNS = {
+        { match = "finger", hpGate = 0.4 },
+        { match = "kick",   hpGate = 0.4 },
+        { match = "rage",   hpGate = nil  },
+    }
+    local PRESTIGE_ENTRY_TELEPORT_WAIT = 0.15
+    local PRESTIGE_POST_KILL_SETTLE_MAX_FRAMES = 40
+    local PRESTIGE_CHAIN_WAIT = 0.08
+    local PRESTIGE_VAMPIRE_CHAIN_WAIT = 0.5
+    local function getStandKeyPlan(activeStand)
+        if not activeStand or activeStand == "" then
+            return { "H", "T", "X" }
+        end
+        local lower = string.lower(activeStand)
+        if string.find(lower, "silver chariot", 1, true) then
+            return { "Y", "H", "Z", "T" }
+        end
+        if string.find(lower, "d4c", 1, true) then
+            return { "Y", "U" }
+        end
+        if string.find(lower, "king crimson", 1, true) then
+            return {}
+        end
+        return { "H", "T", "X", "Y", "U", "Z" }
+    end
+
+    local function getKillSkillRule(skillName)
+        if not skillName or skillName == "" then return nil end
+        local lower = skillName:lower()
+        for _, p in ipairs(KILL_SKILL_PATTERNS) do
+            if string.find(lower, p.match, 1, true) then
+                return p
+            end
+        end
+        return nil
+    end
+
+    local function findAliveNpcByName(npcName)
+        local ok, children = pcall(function()
+            return workspace.Living:GetChildren()
+        end)
+        if not ok or not children then return nil end
+        for _, c in ipairs(children) do
+            if c.Name == npcName
+                and c:FindFirstChild("HumanoidRootPart")
+                and c:FindFirstChild("Health")
+                and c.Health.Value > 0 then
+                return c
+            end
+        end
+        return nil
+    end
+
+    local function prestigeKillNPC(npcName, offsetZ, offsetY)
+        local npc
+        local npcWaitDeadline = tick() + 12
+        while autoPrestigeEnabled and tick() < npcWaitDeadline do
+            local ok, result = pcall(function()
+                return workspace.Living:FindFirstChild(npcName)
+            end)
+            if ok and result and result:FindFirstChild("HumanoidRootPart") then
+                npc = result
+                break
+            end
+            setStatus("Waiting for " .. npcName .. " to spawn")
+            task.wait(0.5)
+        end
+        if not npc or not npc:FindFirstChild("HumanoidRootPart") then return false end
+        local npcHRP = npc.HumanoidRootPart
+        local maxHP  = (npc:FindFirstChild("Health") and npc.Health.Value) or 100
+        local killedThisRun = false
+
+        local function stabilizeRoot(anchoredState)
+            local hrp = getRootPart()
+            if not hrp then return end
+            hrp.AssemblyLinearVelocity  = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            if anchoredState ~= nil then
+                hrp.Anchored = anchoredState
+            end
+        end
+
+        local function ensureStandSummoned(timeoutSec)
+            local deadline = tick() + (timeoutSec or 1.8)
+            while autoPrestigeEnabled and tick() < deadline do
+                local stand = getStandMorph()
+                if stand and stand.Parent then
+                    return stand
+                end
+                toggleStand()
+                task.wait(0.25)
+            end
+            return getStandMorph()
+        end
+
+        local standCheck = ensureStandSummoned(3.5)
+        if not standCheck then
+            setStatus("Stand bugged; resetting character")
+            pcall(function() getCharacter().Humanoid.Health = 0 end)
+            waitUntilNewCharAuto(22)
+            return false
+        end
+
+        task.spawn(learnAllSkills)
+
+        local attackHeight = -(offsetY or 20)
+        local engagePos = npcHRP.CFrame - npcHRP.CFrame.LookVector * (offsetZ or 2)
+            + Vector3.new(0, attackHeight, 0)
+        stabilizeRoot(false)
+        getRootPart().CFrame = CFrame.lookAt(engagePos.Position, npcHRP.Position)
+        local char = LocalPlayer.Character
+        local FocusCam
+        if char then
+            if char:FindFirstChild("FocusCam") == nil then
+                FocusCam = Instance.new("ObjectValue", char)
+                FocusCam.Name = "FocusCam"
+                FocusCam.Value = npcHRP
+            else
+                FocusCam = char:FindFirstChild("FocusCam")
+                if FocusCam then FocusCam.Value = npcHRP end
+            end
+        end
+        stabilizeRoot(false)
+        task.wait(PRESTIGE_ENTRY_TELEPORT_WAIT)
+
+        local killConfirmed = false
+        local xpConn = LocalPlayer.PlayerStats.Experience:GetPropertyChangedSignal("Value"):Connect(function()
+            killConfirmed = true
+        end)
+
+        local moneyConn
+        pcall(function()
+            moneyConn = PlayerGui:WaitForChild("HUD").Main.DropMoney.Money.ChildAdded:Connect(function()
+                killConfirmed = true
+            end)
+        end)
+
+        local function settle()
+            local hrp = getRootPart()
+            if not hrp then return end
+            hrp.AssemblyLinearVelocity  = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            hrp.Anchored = true
+            local frames = (npcName == "Vampire")
+                and math.max(18, math.floor(PRESTIGE_POST_KILL_SETTLE_MAX_FRAMES * 0.65))
+                or PRESTIGE_POST_KILL_SETTLE_MAX_FRAMES
+            while autoPrestigeEnabled and frames > 0 and not killConfirmed do
+                task.wait()
+                frames = frames - 1
+            end
+            local hrp2 = getRootPart()
+            if hrp2 then
+                hrp2.AssemblyLinearVelocity  = Vector3.zero
+                hrp2.AssemblyAngularVelocity = Vector3.zero
+                hrp2.Anchored = false
+            end
+        end
+
+        while autoPrestigeEnabled do
+            task.wait()
+            stabilizeRoot(false)
+
+            local currentHRP = npc and npc:FindFirstChild("HumanoidRootPart")
+            if currentHRP then npcHRP = currentHRP end
+            local stillAlive = npc and npc.Parent
+                and npc:FindFirstChild("Health")
+                and npc.Health.Value > 0
+            if npcName == "Security Guard" and not stillAlive and not killConfirmed then
+                local nextTarget = findAliveNpcByName(npcName)
+                if nextTarget and nextTarget ~= npc then
+                    npc    = nextTarget
+                    npcHRP = nextTarget.HumanoidRootPart
+                    maxHP  = (nextTarget:FindFirstChild("Health") and nextTarget.Health.Value) or maxHP
+                    task.wait()
+                    continue
+                end
+            end
+            if not stillAlive or killConfirmed then
+                killedThisRun = true
+                pcall(function()
+                    getRemoteEvent():FireServer("InputEnded", { Input = Enum.KeyCode.E })
+                end)
+                settle()
+                break
+            end
+
+            if not getStandMorph() then
+                if not ensureStandSummoned(2) then
+                    stabilizeRoot(false)
+                    task.wait(0.1)
+                    continue
+                end
+            end
+
+            pcall(function()
+                local char   = LocalPlayer.Character
+                local remote = getRemoteEvent()
+                if not char or not remote then return end
+
+                local hpFrac    = (npc:FindFirstChild("Health") and npc.Health.Value or 0) / maxHP
+                local ragdolled = npc:FindFirstChild("RagdollParts") ~= nil
+                local barraging = char:FindFirstChild("Stand Barraging") ~= nil
+
+                local stand = getStandMorph()
+                local standRoot = stand and stand:FindFirstChild("HumanoidRootPart")
+                if standRoot and npc:FindFirstChild("Head") then
+                    standRoot.CFrame = CFrame.lookAt(
+                        npc.Head.Position + Vector3.new(0, 3.8, 0),
+                        npcHRP.Position
+                    )
+                end
+
+                local standName = PlayerStand.Value
+                local isRequiem = standName == "King Crimson Requiem" or standName == "King Crimson: Requiem" or standName == "Star Platinum: The World" or standName == "Star Platinum The World"
+
+                if not isRequiem then
+                    if isSkillOnCooldown("Stand Barrage") or ragdolled or hpFrac <= 0.45 then
+                        remote:FireServer("InputEnded", { Input = Enum.KeyCode.E })
+                    else
+                        remote:FireServer("InputBegan", { Input = Enum.KeyCode.E })
+                    end
+                end
+
+                if not ragdolled and not barraging then
+                    local function tryKey(keyName)
+                        local skill = getSkillOnKey(char, keyName)
+                        if not skill or skill == "" then return false end
+                        if skill == "Ora Kicks" then return false end
+                        if not hasStandSkill(skill) then return false end
+                        if isSkillOnCooldown(skill) then return false end
+                        local activeStand = PlayerStand.Value
+                        if activeStand == "Silver Chariot" then
+                            local lower = skill:lower()
+                            if string.find(lower, "barrage", 1, true) then return false end
+                        elseif activeStand == "D4C" or activeStand == "King Crimson" or activeStand == "King Crimson Requiem" or activeStand == "King Crimson: Requiem" or activeStand == "Star Platinum: The World" or activeStand == "Star Platinum The World" then
+
+                        else
+                            local rule = getKillSkillRule(skill)
+                            if not rule then return false end
+                            if rule.hpGate and hpFrac <= rule.hpGate then return false end
+                        end
+                        local kc = Enum.KeyCode[keyName]
+                        if not kc then return false end
+                        remote:FireServer("InputBegan", { Input = kc })
+                        remote:FireServer("InputEnded", { Input = kc })
+                    end
+                    local activeStand = PlayerStand.Value
+                    local keyPlan = getStandKeyPlan(activeStand)
+                    for _, keyName in ipairs(keyPlan) do
+                        tryKey(keyName)
+                    end
+                end
+
+                remote:FireServer("Attack", "m1")
+                local followPos = npcHRP.CFrame - npcHRP.CFrame.LookVector * (offsetZ or 2)
+                    + Vector3.new(0, attackHeight, 0)
+                getRootPart().CFrame = CFrame.lookAt(followPos.Position, npcHRP.Position)
+                if FocusCam and FocusCam.Parent then FocusCam.Value = npcHRP end
+                stabilizeRoot(false)
+            end)
+        end
+
+        if xpConn then xpConn:Disconnect() end
+        if moneyConn then moneyConn:Disconnect() end
+        pcall(function() if FocusCam then FocusCam:Destroy() end end)
+        stabilizeRoot(false)
+        return killedThisRun
+    end
+
+    local registeredItems = {}
+    local promptToName    = {}
+    local promptConns     = {}
+
+    local function unregisterPrompt(prompt)
+        local name = promptToName[prompt]
+        if not name then return end
+        if promptConns[prompt] then
+            promptConns[prompt]:Disconnect()
+            promptConns[prompt] = nil
+        end
+        promptToName[prompt] = nil
+        if registeredItems[name] then
+            local idx = table.find(registeredItems[name], prompt)
+            if idx then table.remove(registeredItems[name], idx) end
+            if #registeredItems[name] == 0 then registeredItems[name] = nil end
+        end
+    end
+
+    local function registerPrompt(obj)
+        if obj.ClassName ~= "ProximityPrompt" then return end
+        if obj.Enabled then return end
+        if not obj.Parent:FindFirstChild("PointLight", true) then return end
+        local mesh = obj.Parent:FindFirstChildWhichIsA("MeshPart") or obj.Parent:FindFirstChildWhichIsA("Part")
+        if mesh and mesh.Transparency >= 1 then return end
+        local name = obj.ObjectText
+        if not registeredItems[name] then registeredItems[name] = {} end
+        if table.find(registeredItems[name], obj) then return end
+        table.insert(registeredItems[name], obj)
+        promptToName[obj] = name
+        promptConns[obj]  = obj.AncestryChanged:Connect(function()
+            if not obj:IsDescendantOf(workspace) then
+                unregisterPrompt(obj)
+            end
+        end)
+    end
+
+    pcall(function()
+        for _, v in pairs(workspace.Item_Spawns.Items:GetDescendants()) do
+            registerPrompt(v)
+        end
+        workspace.Item_Spawns.Items.DescendantAdded:Connect(registerPrompt)
+        workspace.Item_Spawns.Items.DescendantRemoving:Connect(unregisterPrompt)
+    end)
+
+    local function isFullOfItem(itemName)
+        local count = 0
+        for _, v in pairs(Backpack:GetChildren()) do
+            if v.Name == itemName then count += 1 end
+        end
+        local cap = getItemStackMax(itemName) * (PlayerOwns2xInv and 2 or 1)
+        return count >= cap
+    end
+
+    local itemFarmTiming = {
+        mainLoopSeconds       = 0.2,
+        sweepStepSeconds      = 0.07,
+        pickupBaseSeconds     = 0.31,
+        pingDivisor           = 220,
+        pingDelayMaxSeconds   = 0.1,
+        emptyRescanSeconds    = 3,
+        hopOnEmptyWaitSeconds = 0.3,
+    }
+
+    local itemFarmCoords = {
+        Vector3.new(333.283508, -0.039038, -100.840248),
+        Vector3.new(-57.569302, 6.892837, 32.625587),
+        Vector3.new(-56.355259, 6.892516, 121.205681),
+        Vector3.new(123.860382, -25.754335, 526.450500),
+        Vector3.new(269.684052, -26.004833, 318.603943),
+        Vector3.new(328.879852, -0.039038, -27.590733),
+        Vector3.new(446.596497, 30.729956, -283.112396),
+        Vector3.new(148.746017, 0.206251, -474.856873),
+        Vector3.new(-60.727783, 0.206253, -682.052002),
+        Vector3.new(-490.798950, 10.517332, -771.658875),
+        Vector3.new(-402.275482, 0.244470, -119.126389),
+        Vector3.new(-265.857452, -5.250957, 22.065256),
+        Vector3.new(151.404068, 0.427911, -725.128906),
+        Vector3.new(500.335114, 79.717171, -77.421906),
+        Vector3.new(-7.651116, 47.461655, -52.410168),
+        Vector3.new(336.875580, 0.206156, -475.353394),
+        Vector3.new(1097.178711, 116.668106, -86.763573),
+    }
+
+    local function sweepItemFarmCoords()
+        if not getRootPart() then return end
+        repeat
+            for _, pos in ipairs(itemFarmCoords) do
+                local char = LocalPlayer.Character
+                if char then
+                    local sweepPos = Vector3.new(pos.X, -15, pos.Z)
+                    pcall(function() char:PivotTo(CFrame.new(sweepPos)) end)
+                    local hrp = char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        hrp.AssemblyLinearVelocity  = Vector3.zero
+                        hrp.AssemblyAngularVelocity = Vector3.zero
+                    end
+                    for _, v in pairs(char:GetDescendants()) do
+                        if v:IsA("BasePart") then v.CanCollide = false end
+                    end
+                end
+                task.wait(itemFarmTiming.sweepStepSeconds)
+            end
+        until not autoPrestigeEnabled
+    end
+
+    local function clickGuiButton(sig)
+        if not sig then return end
+        if type(firesignal) == "function" then
+            firesignal(sig)
+        else
+            sig:Fire()
+        end
+    end
+
+    local function pushLisaLisaDialogue()
+        local dg = PlayerGui:FindFirstChild("DialogueGui")
+        if not dg then return false end
+        local frame = dg:FindFirstChild("Frame")
+        local cont  = frame and frame:FindFirstChild("ClickContinue")
+        local opts  = frame and frame:FindFirstChild("Options")
+        local opt1  = opts and opts:FindFirstChild("Option1")
+        local btn   = opt1 and opt1:FindFirstChild("TextButton")
+        if cont and cont.MouseButton1Click then
+            clickGuiButton(cont.MouseButton1Click)
+        end
+        if btn and btn.MouseButton1Click then
+            clickGuiButton(btn.MouseButton1Click)
+        end
+        return true
+    end
+
+    local function firePrestige()
+        setStatus("Firing prestige")
+        local prevPrestige = PlayerPrestige.Value
+        fireDialogue("Prestige", "Dialogue2", "Option1")
+        task.wait(0.5)
+        Window:Notify("Auto Prestige", "Prestiged to " .. (prevPrestige + 1) .. ".", 5)
+        pcall(function() getCharacter().Humanoid.Health = 0.1 end)
+        task.wait()
+        pcall(function() getCharacter().Humanoid.Health = 0 end)
+        if not waitUntilNewCharAuto(22) then
+            setStatus("Respawn timeout after prestige")
+            return false
+        end
+        task.wait(1)
+        local deadline = tick() + 8
+        repeat
+            task.wait(0.5)
+            fireStorylineSweep()
+        until next(getQuests()) ~= nil or tick() > deadline or not autoPrestigeEnabled
+        return true
+    end
+
+    local lastNpcKillAt = tick()
+    local suspiciousKillWarned = false
+    local storyQuestCompletionSent = {}
+    local vampireQuestCompletionSent = false
+    local questProgressValue = PlayerStats:FindFirstChild("QuestProgress")
+    local questMaxProgressValue = PlayerStats:FindFirstChild("QuestMaxProgress")
+
+    local function getQuestProgressText(quests)
+        quests = quests or getQuests()
+        local progress = (questProgressValue and questProgressValue.Value) or 0
+        local maxProgress = (questMaxProgressValue and questMaxProgressValue.Value) or 0
+        local progressText = (maxProgress > 0) and (tostring(progress) .. "/" .. tostring(maxProgress)) or nil
+        if quests[VAMPIRE_QUEST] then
+            if progressText then
+                return "Killed " .. progressText .. " vampires"
+            end
+            return "Killed ?/3 vampires"
+        end
+        for _, e in ipairs(STORY_NPCS) do
+            if quests[e.quest] then
+                if progressText then
+                    return tostring(e.npc) .. " (" .. progressText .. ")"
+                end
+                return tostring(e.npc)
+            end
+        end
+        local anyQuest = next(quests)
+        if anyQuest then
+            if progressText then
+                return tostring(anyQuest) .. " (" .. progressText .. ")"
+            end
+            return tostring(anyQuest)
+        end
+        return progressText and ("No active quest (" .. progressText .. ")") or "No active quest"
+    end
+
+    local function refreshQuestStatus(quests)
+        quests = quests or getQuests()
+        setStatus(getQuestProgressText(quests))
+        return quests
+    end
+
+    local function markNpcKill(npcName)
+        lastNpcKillAt = tick()
+        suspiciousKillWarned = false
+        refreshQuestStatus(getQuests())
+    end
+
+    local function progressStory()
+        if autoPrestigeEnabled and (PlayerStand.Value == "King Crimson" or PlayerStand.Value == "Star Platinum") and PlayerPrestige.Value >= 1 then
+            local req = Backpack:FindFirstChild("Requiem Arrow")
+            if req then
+                local sk = LocalPlayer:FindFirstChild("CharacterSkillTree")
+                if not (sk and sk:FindFirstChild("Worthiness V") and sk["Worthiness V"].Value) then
+                    pcall(function()
+                        for _, skill in ipairs({"Worthiness","Worthiness II","Worthiness III","Worthiness IV","Worthiness V"}) do
+                            learnSkill(skill, "Character")
+                            task.wait(0.1)
+                        end
+                    end)
+                    task.wait(0.5)
+                end
+                Window:Notify("Auto Prestige", "Found Requiem Arrow! Attempting to use...", 5)
+                local item = req
+                getHumanoid():EquipTool(item)
+                local inChar = getCharacter():WaitForChild("Requiem Arrow", 3)
+                if inChar then
+                    repeat
+                        pcall(function() inChar:Activate() end)
+                        task.wait()
+                    until PlayerGui:FindFirstChild("DialogueGui")
+                    local dialogueGui = PlayerGui:FindFirstChild("DialogueGui")
+                    local startTime = tick()
+                    while dialogueGui and dialogueGui.Parent and tick() - startTime < 5 do
+                        pcall(function()
+                            local frame = dialogueGui:FindFirstChild("Frame")
+                            if not frame then return end
+                            local clickContinue = frame:FindFirstChild("ClickContinue")
+                            if clickContinue then
+                                for _, conn in pairs(getconnections(clickContinue.MouseButton1Click)) do
+                                    conn:Fire()
+                                end
+                            end
+                            local options = frame:FindFirstChild("Options")
+                            if options then
+                                local option1 = options:FindFirstChild("Option1")
+                                if option1 then
+                                    local textButton = option1:FindFirstChild("TextButton")
+                                    if textButton then
+                                        for _, conn in pairs(getconnections(textButton.MouseButton1Click)) do
+                                            conn:Fire()
+                                        end
+                                    end
+                                end
+                            end
+                        end)
+                        task.wait(0.1)
+                        dialogueGui = PlayerGui:FindFirstChild("DialogueGui")
+                    end
+                end
+                setStatus("Used Requiem Arrow on " .. PlayerStand.Value .. "!")
+                task.wait(6)
+            end
+        end
+
+        local questsBefore = getQuests()
+        local quests = refreshQuestStatus(questsBefore)
+
+        for _, e in ipairs(STORY_NPCS) do
+            if not autoPrestigeEnabled then return false end
+            if quests[e.quest] then
+                setStatus("Killing " .. e.npc)
+                while autoPrestigeEnabled and getQuests()[e.quest] do
+                    if prestigeKillNPC(e.npc, e.offZ, e.offY) then
+                        markNpcKill(e.npc)
+                    end
+                    local questsNow = getQuests()
+                    if questsBefore[e.quest] and not questsNow[e.quest] and not storyQuestCompletionSent[e.quest] then
+                        storyQuestCompletionSent[e.quest] = true
+                    end
+                    if questsNow[e.quest] then
+                        storyQuestCompletionSent[e.quest] = false
+                    end
+                    questsBefore = questsNow
+                    refreshQuestStatus(questsNow)
+                    if e.npc == "Security Guard" then
+                        task.wait(0.8)
+                    else
+                        task.wait(PRESTIGE_CHAIN_WAIT)
+                    end
+                end
+
+                if e.npc == "Diavolo" and autoPrestigeEnabled then
+                    fireStorylineSweep()
+                    task.wait(0.5)
+                    fireDialogue("Storyline #14", "Dialogue7", "Option1")
+                    task.wait(0.5)
+                    local char = LocalPlayer.Character
+                    if char then
+                        local hum = char:FindFirstChildWhichIsA("Humanoid")
+                        if hum then
+                            hum.Health = 0
+                            task.wait(3)
+                        end
+                    end
+                end
+                return true
+            end
+        end
+
+        local hasVampireQuest = quests[VAMPIRE_QUEST] ~= nil
+        local levelUnlocked   = PlayerLevel.Value >= VAMPIRE_LVL_GATE
+
+        if not hasVampireQuest and levelUnlocked then
+            setStatus("Checking for remaining story quests...")
+            fireStorylineSweep()
+            task.wait(1.5)
+            local freshQuests = getQuests()
+            local gotStoryQuest = false
+            for _, e in ipairs(STORY_NPCS) do
+                if freshQuests[e.quest] then
+                    gotStoryQuest = true
+                    break
+                end
+            end
+            if not gotStoryQuest and autoPrestigeEnabled and not getQuests()[VAMPIRE_QUEST] then
+                setStatus("Asking William Zeppeli")
+                for _ = 1, 6 do
+                    if not autoPrestigeEnabled then return false end
+                    fireDialogue("William Zeppeli", "Dialogue4", "Option1")
+                    task.wait(0.4)
+                    if getQuests()[VAMPIRE_QUEST] then break end
+                end
+            end
+        end
+
+        if getQuests()[VAMPIRE_QUEST] then
+            setStatus("Killing Vampires")
+            while autoPrestigeEnabled and getQuests()[VAMPIRE_QUEST] do
+                if prestigeKillNPC("Vampire", VAMPIRE_OFFZ, VAMPIRE_OFFY) then
+                    markNpcKill("Vampire")
+                end
+                local questsNow = getQuests()
+                if questsBefore[VAMPIRE_QUEST] and not questsNow[VAMPIRE_QUEST] and not vampireQuestCompletionSent then
+                    vampireQuestCompletionSent = true
+                end
+                if questsNow[VAMPIRE_QUEST] then
+                    vampireQuestCompletionSent = false
+                end
+                questsBefore = questsNow
+                refreshQuestStatus(questsNow)
+                task.wait(PRESTIGE_VAMPIRE_CHAIN_WAIT)
+            end
+            return true
+        end
+
+        return false
+    end
+
+    local function hasAutoPrestigeRuntime()
+        local char = LocalPlayer.Character
+        if not char or not char.Parent then return false end
+        if not char:FindFirstChild("HumanoidRootPart") then return false end
+        if not char:FindFirstChild("RemoteEvent") then return false end
+        if not char:FindFirstChild("RemoteFunction") then return false end
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+        return true
+    end
+
+    local function waitForAutoPrestigeRuntime(timeoutSec)
+        local deadline = tick() + (timeoutSec or 8)
+        repeat
+            if hasAutoPrestigeRuntime() then return true end
+            task.wait(0.2)
+        until tick() > deadline or not autoPrestigeEnabled
+        return hasAutoPrestigeRuntime()
+    end
+
+    local function runAutoPrestige()
+        if autoPrestigeBusy then return end
+        autoPrestigeBusy = true
+        local runtimeMisses = 0
+        local loopErrors = 0
+
+        if isBlacklistedStand(PlayerStand.Value) then
+            Window:Notify("Auto Prestige", "Do not use a blacklisted stand: " .. PlayerStand.Value .. ".", 8)
+            autoPrestigeEnabled = false
+            autoPrestigeBusy = false
+            setStatus("Blacklisted stand")
+            return
+        end
+        if not waitForAutoPrestigeRuntime(8) then
+            Window:Notify("Auto Prestige", "Character/remotes unavailable. Try again in a moment.", 7)
+            autoPrestigeEnabled = false
+            autoPrestigeBusy = false
+            setStatus("Runtime unavailable")
+            return
+        end
+        task.spawn(learnAllSkills)
+        lastNpcKillAt = tick()
+        suspiciousKillWarned = false
+        refreshQuestStatus(getQuests())
+
+        while autoPrestigeEnabled do
+            if PlayerLevel.Value >= 50 then
+                Window:Notify("Auto Prestige", "Max level reached.", 7)
+                setStatus("Max level (50)")
+                autoPrestigeEnabled = false
+                break
+            end
+            if tick() - lastNpcKillAt >= NO_KILL_WARN_TIMEOUT and not suspiciousKillWarned then
+                suspiciousKillWarned = true
+                Window:Notify("Auto Prestige", "Suspicious activity: no NPC killed within 240 seconds.", 8)
+                setStatus("Warning: no NPC kill for 240s")
+            end
+            if math.floor(tick() * 2) % 4 == 0 then
+                refreshQuestStatus(getQuests())
+            end
+            if not hasAutoPrestigeRuntime() then
+                runtimeMisses = runtimeMisses + 1
+                setStatus("Recovering runtime (" .. tostring(runtimeMisses) .. "/3)")
+                if not waitForAutoPrestigeRuntime(6) and runtimeMisses >= 3 then
+                    Window:Notify("Auto Prestige", "Stopped: runtime unavailable after retries.", 7)
+                    autoPrestigeEnabled = false
+                    break
+                end
+                task.wait(0.35)
+                continue
+            end
+            runtimeMisses = 0
+
+            if isBlacklistedStand(PlayerStand.Value) then
+                Window:Notify("Auto Prestige", "Stopped. Blacklisted stand detected: " .. PlayerStand.Value .. ".", 7)
+                autoPrestigeEnabled = false
+                break
+            end
+
+            local ok, err = pcall(function()
+                if canPrestigeNow() then
+                    if not firePrestige() then
+                        error("prestige flow failed")
+                    end
+                    if not autoPrestigeEnabled then return end
+                end
+
+                local progressed = progressStory()
+                if not progressed and autoPrestigeEnabled then
+                    setStatus("Claiming storyline")
+                    local sweepAttempts = 0
+                    local maxSweepAttempts = 15
+                    while autoPrestigeEnabled and sweepAttempts < maxSweepAttempts do
+                        fireStorylineSweep()
+                        task.wait(1)
+                        sweepAttempts = sweepAttempts + 1
+                        if next(getQuests()) ~= nil then break end
+                    end
+                    if next(getQuests()) == nil and autoPrestigeEnabled then
+                        setStatus("Recovering: no quest assigned")
+                        Window:Notify("Auto Prestige", "No quest assigned after storyline sweep. Respawning.", 7)
+                        pcall(function() getCharacter().Humanoid.Health = 0 end)
+                        waitUntilNewCharAuto(22)
+                        task.wait(2)
+                    end
+                end
+            end)
+            if not ok then
+                loopErrors = loopErrors + 1
+                setStatus("Error recovery (" .. tostring(loopErrors) .. "/3)")
+                warn("[Auto Prestige] " .. tostring(err))
+                if loopErrors >= 3 then
+                    Window:Notify("Auto Prestige", "Stopped after repeated runtime errors.", 7)
+                    autoPrestigeEnabled = false
+                    break
+                end
+                waitForAutoPrestigeRuntime(6)
+                task.wait(0.75)
+                continue
+            end
+            loopErrors = 0
+            task.wait(0.3)
+        end
+
+        autoPrestigeBusy = false
+        if autoPrestigeStatus ~= "Max level (50)" then
+            setStatus("Stopped")
+        end
+    end
+
+    local StorylineMain = StorylineTab:Section("Auto Storyline", "Left", "scroll")
+
+    StorylineMain:Paragraph("Auto Storyline automatically progresses through the main story by killing required NPCs, turning in quests, and prestiging when eligible. Make sure your current stand is not blacklisted.", Color3.fromRGB(140, 140, 140))
+
+    if not getgenv().MethionBypassLoaded then
+        StorylineMain:Paragraph("Storyline is disabled your executor is not supported.", Color3.fromRGB(255, 80, 80))
+    end
+
+    if getgenv().MethionBypassLoaded then
+        StorylineMain:Toggle("Auto Prestige", false, function(state)
+            if autoPrestigeBusy and state then return end
+            if state then
+                if getgenv().QuestFarmEnabled or getgenv().NPCFarmEnabled then
+                    Window:Notify("Auto Prestige", "Quest Farm is running! Disable it first.", 5)
+                    return
+                end
+                if isBlacklistedStand(PlayerStand.Value) then
+                    Window:Notify("Auto Prestige", "Do not use a blacklisted stand: " .. PlayerStand.Value .. ".", 8)
+                    return
+                end
+            end
+            autoPrestigeEnabled = state
+            if state then
+                Window:Notify("Auto Prestige", "Started.", 5)
+                task.spawn(runAutoPrestige)
+            else
+                Window:Notify("Auto Prestige", "Stopped.", 5)
+                setStatus("Stopped")
+            end
+        end)
+    end
+
+    local StorylineQuick = StorylineTab:Section("Quick Actions", "Right", "zap")
+    StorylineQuick:Paragraph("Manual storyline tools for when Auto Prestige is not running.", Color3.fromRGB(140, 140, 140))
+    StorylineQuick:Button("Fire All Storyline Dialogues", function()
+        if autoPrestigeEnabled or autoPrestigeBusy then
+            Window:Notify("Storyline", "Auto Storyline is already running! Stop it first.", 5)
+            return
+        end
+        fireStorylineSweep()
+        Window:Notify("Storyline", "Storyline dialogues fired.", 5)
+    end)
+end
