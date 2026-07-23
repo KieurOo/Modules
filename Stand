@@ -1,0 +1,982 @@
+return function(Window, player, StandFarmTab, ctx)
+    local safePlacePosition = ctx and ctx.safePlacePosition or Vector3.new(-47.261887, -33.486183, 90.047981)
+    local travelToInstant   = ctx and ctx.travelToInstant or function() end
+    local travelToTween     = ctx and ctx.travelToTween or function() end
+    local enableNoclip      = ctx and ctx.enableNoclip or function() end
+    local disableNoclip     = ctx and ctx.disableNoclip or function() end
+    local maxLimits         = ctx and ctx.maxLimits or {}
+    local PlayerLevel       = ctx and ctx.PlayerLevel
+    local PlayerStand       = ctx and ctx.PlayerStand
+    local PlayerPrestige    = ctx and ctx.PlayerPrestige
+    local PlayerStats       = ctx and ctx.PlayerStats
+    local ReplicatedStorage = ctx and ctx.ReplicatedStorage or game:GetService("ReplicatedStorage")
+
+    standFarmEnabled = standFarmEnabled or false
+    standFarmBusy = standFarmBusy or false
+    ribFarmRunning = ribFarmRunning or false
+    selectedStands = selectedStands or {}
+    stopOnShiny = stopOnShiny or false
+    autoCollectArrowRoka = autoCollectArrowRoka or false
+    swapSlotOnDesired = swapSlotOnDesired or false
+
+local RIB_NAME = "Rib Cage of The Saint's Corpse"
+local STAND_RETRIES = 70
+local STAND_SLOT_MAX = 25
+
+    standFarmEnabled = standFarmEnabled or false
+    standFarmBusy = standFarmBusy or false
+    selectedStands = selectedStands or {}
+    stopOnShiny = stopOnShiny or false
+    swapSlotOnDesired = swapSlotOnDesired or false
+    autoCollectArrowRoka = autoCollectArrowRoka or false
+
+    ribFarmRunning = ribFarmRunning or false
+
+local function getStandCharacter()
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        return player.Character
+    end
+    return player.CharacterAdded:Wait()
+end
+
+local function getStandRootPart()
+    return getStandCharacter():WaitForChild("HumanoidRootPart")
+end
+
+local function getStandHumanoid()
+    return getStandCharacter():FindFirstChildWhichIsA("Humanoid")
+end
+
+local function getStandRemoteEvent()
+    return getStandCharacter():WaitForChild("RemoteEvent")
+end
+
+local function getStandRemoteFunction()
+    return getStandCharacter():WaitForChild("RemoteFunction")
+end
+
+local function standUnequipAllTools()
+    pcall(function() getStandHumanoid():UnequipTools() end)
+end
+
+local function standWaitUntilNewChar()
+    local newChar = player.CharacterAdded:Wait()
+    newChar:WaitForChild("HumanoidRootPart")
+    newChar:WaitForChild("Humanoid")
+end
+
+local function standTeleportUp()
+    local hrp = getStandRootPart()
+    if hrp then
+        hrp.CFrame = CFrame.new(safePlacePosition)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+local function collectArrowRokaFromMap()
+    local itemsToCollect = {"Mysterious Arrow", "Rokakaka"}
+    local collectedAny = false
+    local useInstant = getgenv().MethionBypassLoaded == true
+
+    for _, itemName in ipairs(itemsToCollect) do
+        local keepCollecting = true
+        while keepCollecting and standFarmEnabled do
+            local count = 0
+            for _, v in pairs(player.Backpack:GetChildren()) do
+                if v.Name == itemName then count = count + 1 end
+            end
+            if player.Character then
+                for _, v in pairs(player.Character:GetChildren()) do
+                    if v.Name == itemName then count = count + 1 end
+                end
+            end
+            local maxAmt = maxLimits[itemName] or 25
+            if count >= maxAmt then break end
+
+            local nearest = nil
+            local minDist = math.huge
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not hrp then break end
+
+            for _, v in pairs(game.Workspace.Item_Spawns.Items:GetChildren()) do
+                local itemPart = v:FindFirstChildOfClass("MeshPart") or v:FindFirstChildOfClass("Part")
+                local prox = v:FindFirstChild("ProximityPrompt")
+                if itemPart and prox and itemPart.Transparency < 1 and prox.ObjectText == itemName then
+                    local dist = (itemPart.Position - hrp.Position).Magnitude
+                    if dist < minDist then
+                        minDist = dist
+                        nearest = v
+                    end
+                end
+            end
+
+            if not nearest then
+                if collectedAny then
+                    Window:Notify("Stand Farm", "No more " .. itemName .. " on map.", 3)
+                end
+                break
+            end
+
+            local itemPart = nearest:FindFirstChildOfClass("MeshPart") or nearest:FindFirstChildOfClass("Part")
+            local prox = nearest:FindFirstChild("ProximityPrompt")
+
+            Window:Notify("Stand Farm", "Collecting " .. itemName .. "...", 3)
+
+            if useInstant then
+                local originalMethod = getgenv().InstantMethod
+                getgenv().InstantMethod = "Down"
+                enableNoclip()
+                travelToInstant(nearest)
+
+                task.wait(1)
+
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            for i = 1, 10 do
+                if not nearest or not nearest.Parent then break end
+                if hrp and (itemPart.Position - hrp.Position).Magnitude < 12 then
+                    pcall(function() fireproximityprompt(prox, 0, true) end)
+                end
+                task.wait(0.1)
+            end
+
+                task.wait(0.3)
+                cleanupItemStick()
+                getgenv().InstantMethod = originalMethod
+                disableNoclip()
+            else
+                enableNoclip()
+                travelToTween(itemPart, function()
+                    return nearest and nearest.Parent and itemPart and itemPart.Parent
+                end)
+                task.wait(0.3)
+                if nearest and nearest.Parent and itemPart and itemPart.Parent then
+                    local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp2 and (itemPart.Position - hrp2.Position).Magnitude < 10 then
+                        pcall(function() fireproximityprompt(prox, 4) end)
+                        task.wait(0.1)
+                        pcall(function() fireproximityprompt(prox, 4) end)
+                    end
+                end
+                disableNoclip()
+            end
+
+            task.wait(0.2)
+
+            local newCount = 0
+            for _, v in pairs(player.Backpack:GetChildren()) do
+                if v.Name == itemName then newCount = newCount + 1 end
+            end
+            if player.Character then
+                for _, v in pairs(player.Character:GetChildren()) do
+                    if v.Name == itemName then newCount = newCount + 1 end
+                end
+            end
+            if newCount > count then
+                collectedAny = true
+                Window:Notify("Stand Farm", "Collected " .. itemName .. "! (Now: " .. newCount .. ")", 3)
+            else
+                Window:Notify("Stand Farm", "Failed to collect " .. itemName .. ". Skipping.", 3)
+                break
+            end
+        end
+    end
+
+    if collectedAny then
+        Window:Notify("Stand Farm", "Returning to safe place...", 3)
+        if useInstant then
+            local originalMethod = getgenv().InstantMethod
+            getgenv().InstantMethod = "Up"
+            travelToInstant(safePlacePosition)
+            getgenv().InstantMethod = originalMethod
+        else
+            travelToTween(safePlacePosition, function() return true end)
+        end
+        task.wait(0.5)
+    end
+
+    return collectedAny
+end
+
+local function standUseItem(itemName)
+    local item = player.Backpack:FindFirstChild(itemName) or (player.Character and player.Character:FindFirstChild(itemName))
+    if not item then
+        Window:Notify("Stand Farm", "No " .. itemName .. " found!", 3)
+        return false
+    end
+    getStandHumanoid():EquipTool(item)
+    local inChar = getStandCharacter():WaitForChild(itemName, 3)
+    if not inChar then return false end
+
+    repeat
+        pcall(function() inChar:Activate() end)
+        task.wait()
+    until player.PlayerGui:FindFirstChild("DialogueGui")
+
+    local dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
+    local startTime = tick()
+
+    while dialogueGui and dialogueGui.Parent and tick() - startTime < 5 do
+        pcall(function()
+            local frame = dialogueGui:FindFirstChild("Frame")
+            if not frame then return end
+            local clickContinue = frame:FindFirstChild("ClickContinue")
+            if clickContinue then
+                for _, conn in pairs(getconnections(clickContinue.MouseButton1Click)) do
+                    conn:Fire()
+                end
+            end
+            local options = frame:FindFirstChild("Options")
+            if options then
+                local option1 = options:FindFirstChild("Option1")
+                if option1 then
+                    local textButton = option1:FindFirstChild("TextButton")
+                    if textButton then
+                        for _, conn in pairs(getconnections(textButton.MouseButton1Click)) do
+                            conn:Fire()
+                        end
+                    end
+                end
+            end
+        end)
+        task.wait(0.1)
+        dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
+    end
+    return true
+end
+
+local function standLearnSkill(skill, treeType)
+    pcall(function()
+        getStandRemoteFunction():InvokeServer("LearnSkill", {
+            Skill = skill,
+            SkillTreeType = treeType,
+        })
+    end)
+end
+
+local function standLearnWorthiness()
+    for _, skill in ipairs({"Worthiness","Worthiness II","Worthiness III","Worthiness IV","Worthiness V"}) do
+        standLearnSkill(skill, "Character")
+        task.wait(0.1)
+    end
+end
+
+local function getStandMorph()
+    return getStandCharacter():FindFirstChild("StandMorph")
+end
+
+local function desummonStand()
+    if getStandMorph() then
+        pcall(function()
+            getStandRemoteFunction():InvokeServer("ToggleStand", "Toggle")
+        end)
+        task.wait(0.5)
+    end
+end
+
+local function summonStand()
+    if not getStandMorph() then
+        pcall(function()
+            getStandRemoteFunction():InvokeServer("ToggleStand", "Toggle")
+        end)
+        task.wait(0.12)
+    end
+end
+
+local function toggleStand()
+    pcall(function()
+        getStandRemoteFunction():InvokeServer("ToggleStand", "Toggle")
+    end)
+end
+
+local function findEmptyStandSlot()
+    for i = 1, STAND_SLOT_MAX do
+        local slot = PlayerStats:FindFirstChild("Slot" .. i)
+        if slot and slot.Value == "None" then
+            return "Slot" .. i
+        end
+    end
+    return nil
+end
+
+local function swapStandSlot(slotName)
+    if not slotName then return false end
+    local ok = pcall(function()
+        getStandRemoteEvent():FireServer("SwapStand", slotName)
+    end)
+    return ok
+end
+
+local function trySwapToEmptySlotOnHit(notifyTag)
+    if not swapSlotOnDesired then return false end
+    local emptySlot = findEmptyStandSlot()
+    if not emptySlot then
+        Window:Notify(notifyTag or "Stand Farm", "No empty stand slot found.", 3)
+        return false
+    end
+
+    standUnequipAllTools()
+    if getStandMorph() then
+        desummonStand()
+        local morphDeadline = tick() + 1.5
+        while tick() < morphDeadline and getStandMorph() do
+            task.wait(0.05)
+        end
+    end
+
+    if not swapStandSlot(emptySlot) then
+        Window:Notify(notifyTag or "Stand Farm", "Failed to swap to " .. emptySlot .. ".", 3)
+        return false
+    end
+
+    local swapDeadline = tick() + 6
+    while tick() < swapDeadline and PlayerStand.Value ~= "None" do
+        task.wait(0.05)
+    end
+
+    if PlayerStand.Value ~= "None" then
+        Window:Notify(notifyTag or "Stand Farm", "Swap didn't register. Stopping.", 3)
+        return false
+    end
+
+    local ok, hum = pcall(function()
+        return getStandCharacter():FindFirstChildWhichIsA("Humanoid")
+    end)
+    if ok and hum then
+        pcall(function() hum.Health = 0 end)
+        standWaitUntilNewChar()
+        task.wait(0.2)
+    end
+
+    standTeleportUp()
+    Window:Notify(notifyTag or "Stand Farm", "Swapped to " .. emptySlot .. ". Continuing...", 3)
+    return true
+end
+
+local function isRibStand(standsTable)
+    local RIB_STANDS = {
+        ["Soft & Wet"] = true,
+        ["D4C"] = true,
+        ["The World Alternate Universe"] = true,
+        ["Scary Monsters"] = true,
+        ["Tusk ACT 1"] = true,
+    }
+    for name in pairs(standsTable) do
+        if RIB_STANDS[name] then return true end
+    end
+    return false
+end
+
+local function notifyShiny()
+    local sm = getStandMorph()
+    local skin = sm and sm:FindFirstChild("StandSkin")
+    local msg = "Got shiny! " .. PlayerStand.Value .. " (" .. (skin and skin.Value or "?") .. ")"
+    Window:Notify("Stand Farm", msg, 5)
+end
+
+local function notifyStand()
+    local msg = "Got the stand you wanted: " .. PlayerStand.Value
+    Window:Notify("Stand Farm", msg, 5)
+end
+
+local function handleStandSummonBug(featureName)
+    Window:Notify(featureName, ".", 3)
+    getStandCharacter().Humanoid.Health = 0
+    standWaitUntilNewChar()
+    task.wait(0.2)
+end
+
+local function waitForStandState(activeFn, stateFn, timeoutSec, step)
+    local deadline = tick() + (timeoutSec or 10)
+    local interval = step or 0.05
+    while activeFn() and tick() < deadline do
+        if stateFn() then return true end
+        task.wait(interval)
+    end
+    return stateFn()
+end
+
+local function tryRecoverStandMorph(activeFn, timeoutSec)
+    local retries = STAND_RETRIES
+    local deadline = tick() + (timeoutSec or 4.5)
+    while activeFn() and retries > 0 and tick() < deadline do
+        if getStandMorph() then return true end
+        task.wait()
+        retries -= 1
+        toggleStand()
+    end
+    return getStandMorph() ~= nil
+end
+
+local function runRibStandFarm()
+    summonStand()
+
+    if selectedStands[PlayerStand.Value] then
+        Window:Notify("Stand Farm", "You already have the selected rib stand!", 3)
+        standFarmEnabled = false
+        standFarmBusy = false
+        return
+    end
+
+    while standFarmEnabled and task.wait() do
+        if not standFarmEnabled then break end
+
+        local ribCount = 0
+        for _, v in pairs(player.Backpack:GetChildren()) do
+            if v.Name == RIB_NAME then ribCount += 1 end
+        end
+        if player.Character then
+            for _, v in pairs(player.Character:GetChildren()) do
+                if v.Name == RIB_NAME then ribCount += 1 end
+            end
+        end
+
+        if ribCount == 0 then
+            if autoCollectArrowRoka then
+                Window:Notify("Stand Farm", "No Rib Cages left! Auto-collecting...", 3)
+                local collected = collectRibsFromMap()
+                if collected then
+                    continue
+                else
+                    Window:Notify("Stand Farm", "No Rib Cages on map, waiting for spawn...", 3)
+                    task.wait(5)
+                    continue
+                end
+            else
+                Window:Notify("Stand Farm", "No Rib Cages in backpack. Waiting...", 3)
+                task.wait(5)
+                continue
+            end
+        end
+
+        if getStandMorph() then
+            toggleStand()
+        end
+
+        standLearnSkill("Worthiness ", "Character")
+        pcall(function()
+            getStandRemoteEvent():FireServer("EndDialogue", {
+                NPC = RIB_NAME,
+                Dialogue = "Dialogue2",
+                Option = "Option1",
+            })
+        end)
+
+        local sm = getStandCharacter():WaitForChild("StandMorph", 10)
+        if not sm then continue end
+
+        local skin = sm:WaitForChild("StandSkin")
+
+        if skin.Value ~= "" and stopOnShiny then
+            notifyShiny()
+            if swapSlotOnDesired and trySwapToEmptySlotOnHit("Stand Farm") then
+                continue
+            end
+            standFarmEnabled = false
+            break
+        end
+
+        if not standFarmEnabled then break end
+
+        if selectedStands[PlayerStand.Value] then
+            notifyStand()
+            if swapSlotOnDesired and trySwapToEmptySlotOnHit("Stand Farm") then
+                continue
+            end
+            standFarmEnabled = false
+            break
+        end
+    end
+end
+
+local function runArrowStandFarm()
+    if not getStandMorph() and PlayerStand.Value ~= "None" then
+        standUnequipAllTools()
+        task.wait(0.15)
+        local gotMorph = tryRecoverStandMorph(function()
+            return standFarmEnabled
+        end, 4.5)
+
+        if not standFarmEnabled then return end
+        if not gotMorph then
+            handleStandSummonBug("Stand Farm")
+            if not standFarmEnabled then return end
+        end
+    end
+
+    while standFarmEnabled and task.wait() do
+        if not standFarmEnabled then break end
+
+        if PlayerStand.Value == "None" then
+            standLearnSkill("Worthiness", "Character")
+            if not standFarmEnabled then break end
+
+        if not standUseItem("Mysterious Arrow") then
+            if autoCollectArrowRoka then
+                Window:Notify("Stand Farm", "No Arrows left! Auto-collecting...", 3)
+                local collected = collectArrowRokaFromMap()
+                if collected then
+                    continue
+                else
+                    Window:Notify("Stand Farm", "No items on map, waiting for spawn...", 3)
+                    task.wait(5)
+                    continue
+                end
+            else
+                Window:Notify("Stand Farm", "No Mysterious Arrows in backpack. Waiting...", 3)
+                task.wait(5)
+                continue
+            end
+        end
+
+            local gotStand = waitForStandState(function()
+                return standFarmEnabled
+            end, function()
+                return PlayerStand.Value ~= "None"
+            end, 10, 0.05)
+
+            if not standFarmEnabled then break end
+            if not gotStand then
+                handleStandSummonBug("Stand Farm")
+                if not standFarmEnabled then break end
+                continue
+            end
+
+            standUnequipAllTools()
+            task.wait(0.2)
+        end
+
+        if not getStandMorph() then
+            local gotMorph = tryRecoverStandMorph(function()
+                return standFarmEnabled
+            end, 4.5)
+
+            if not standFarmEnabled then break end
+            if not gotMorph then
+                handleStandSummonBug("Stand Farm")
+                if not standFarmEnabled then break end
+            end
+        end
+
+        repeat
+            task.wait(0.05)
+            summonStand()
+        until getStandMorph() or not standFarmEnabled
+
+        if not standFarmEnabled then break end
+
+        local sm = getStandMorph()
+        local skin = sm and sm:WaitForChild("StandSkin")
+        if skin and skin.Value ~= "" and stopOnShiny then
+            notifyShiny()
+            if swapSlotOnDesired and trySwapToEmptySlotOnHit("Stand Farm") then
+                continue
+            end
+            standFarmEnabled = false
+            break
+        end
+
+        if selectedStands[PlayerStand.Value] then
+            notifyStand()
+            if swapSlotOnDesired and trySwapToEmptySlotOnHit("Stand Farm") then
+                continue
+            end
+            standFarmEnabled = false
+            break
+        end
+
+        if not standFarmEnabled then break end
+
+        if not standUseItem("Rokakaka") then
+            if autoCollectArrowRoka then
+                Window:Notify("Stand Farm", "No Rokas left! Auto-collecting...", 3)
+                local collected = collectArrowRokaFromMap()
+                if collected then
+                    continue
+                else
+                    Window:Notify("Stand Farm", "No items on map, waiting for spawn...", 3)
+                    task.wait(5)
+                    continue
+                end
+            else
+                Window:Notify("Stand Farm", "No Rokakaka in backpack. Waiting...", 3)
+                task.wait(5)
+                continue
+            end
+        end
+
+        repeat task.wait() until PlayerStand.Value == "None" or not standFarmEnabled
+
+        standWaitUntilNewChar()
+        task.wait(0.5)
+
+        if not standFarmEnabled then break end
+        standTeleportUp()
+    end
+end
+
+local function startStandFarm()
+    if standFarmBusy then
+        Window:Notify("Stand Farm", "Already running. Please wait.", 3)
+        return
+    end
+    standFarmBusy = true
+
+    if PlayerLevel.Value < 3 then
+        Window:Notify("Stand Farm", "Need at least level 3 to get stands.", 3)
+        standFarmEnabled = false
+        standFarmBusy = false
+        return
+    end
+
+    standTeleportUp()
+
+    if not next(selectedStands) then
+        Window:Notify("Stand Farm", "Please select a stand first.", 3)
+        standFarmEnabled = false
+        standFarmBusy = false
+        return
+    end
+
+    if isRibStand(selectedStands) then
+        summonStand()
+        if selectedStands[PlayerStand.Value] then
+            Window:Notify("Stand Farm", "You already have the selected rib stand!", 3)
+            standFarmEnabled = false
+            standFarmBusy = false
+            return
+        end
+        if PlayerLevel.Value < 6 then
+            Window:Notify("Stand Farm", "Need at least level 6 for rib stands.", 3)
+            standFarmEnabled = false
+            standFarmBusy = false
+            return
+        end
+        local ok, err = pcall(runRibStandFarm)
+        if not ok then
+            warn("[Stand Farm] Error: " .. tostring(err))
+        end
+    else
+        local ok, err = pcall(runArrowStandFarm)
+        if not ok then
+            warn("[Stand Farm] Error: " .. tostring(err))
+        end
+    end
+
+    standFarmEnabled = false
+    standFarmBusy = false
+end
+
+local function countRibs()
+    local total = 0
+    for _, item in pairs(player.Backpack:GetChildren()) do
+        if item.Name == RIB_NAME then total += 1 end
+    end
+    local c = player.Character
+    if c then
+        for _, item in pairs(c:GetChildren()) do
+            if item.Name == RIB_NAME then total += 1 end
+        end
+    end
+    return total
+end
+
+local function collectRibsFromMap()
+    local itemName = RIB_NAME
+    local collectedAny = false
+    local useInstant = getgenv().MethionBypassLoaded == true
+
+    local keepCollecting = true
+    while keepCollecting and (ribFarmRunning or standFarmEnabled) do
+        local count = countRibs()
+        local maxAmt = maxLimits[itemName] or 10
+        if count >= maxAmt then break end
+
+        local nearest = nil
+        local minDist = math.huge
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then break end
+
+        for _, v in pairs(game.Workspace.Item_Spawns.Items:GetChildren()) do
+            local itemPart = v:FindFirstChildOfClass("MeshPart") or v:FindFirstChildOfClass("Part")
+            local prox = v:FindFirstChild("ProximityPrompt")
+            if itemPart and prox and itemPart.Transparency < 1 and prox.ObjectText == itemName then
+                local dist = (itemPart.Position - hrp.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    nearest = v
+                end
+            end
+        end
+
+        if not nearest then
+            if collectedAny then
+                Window:Notify("Rib Farm", "No more " .. itemName .. " on map.", 3)
+            end
+            break
+        end
+
+        local itemPart = nearest:FindFirstChildOfClass("MeshPart") or nearest:FindFirstChildOfClass("Part")
+        local prox = nearest:FindFirstChild("ProximityPrompt")
+
+        Window:Notify("Rib Farm", "Collecting " .. itemName .. "...", 3)
+
+        if useInstant then
+            local originalMethod = getgenv().InstantMethod
+            getgenv().InstantMethod = "Down"
+            enableNoclip()
+            travelToInstant(nearest)
+
+            task.wait(1)
+
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            for i = 1, 10 do
+                if not nearest or not nearest.Parent then break end
+                if hrp and (itemPart.Position - hrp.Position).Magnitude < 12 then
+                    pcall(function() fireproximityprompt(prox, 0, true) end)
+                end
+                task.wait(0.1)
+            end
+
+            task.wait(0.3)
+            cleanupItemStick()
+            getgenv().InstantMethod = originalMethod
+            disableNoclip()
+        else
+            enableNoclip()
+            travelToTween(itemPart, function()
+                return nearest and nearest.Parent and itemPart and itemPart.Parent
+            end)
+            task.wait(0.3)
+            if nearest and nearest.Parent and itemPart and itemPart.Parent then
+                local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                if hrp2 and (itemPart.Position - hrp2.Position).Magnitude < 10 then
+                    pcall(function() fireproximityprompt(prox, 4) end)
+                    task.wait(0.1)
+                    pcall(function() fireproximityprompt(prox, 4) end)
+                end
+            end
+            disableNoclip()
+        end
+
+        task.wait(0.2)
+
+        local newCount = countRibs()
+        if newCount > count then
+            collectedAny = true
+            Window:Notify("Rib Farm", "Collected " .. itemName .. "! (Now: " .. newCount .. ")", 3)
+        else
+            Window:Notify("Rib Farm", "Failed to collect " .. itemName .. ". Skipping.", 3)
+            break
+        end
+    end
+
+    if collectedAny then
+        Window:Notify("Rib Farm", "Returning to safe place...", 3)
+        if useInstant then
+            local originalMethod = getgenv().InstantMethod
+            getgenv().InstantMethod = "Up"
+            travelToInstant(safePlacePosition)
+            getgenv().InstantMethod = originalMethod
+        else
+            travelToTween(safePlacePosition, function() return true end)
+        end
+        task.wait(0.5)
+    end
+
+    return collectedAny
+end
+
+local function holdOneRib()
+    local chr = getStandCharacter()
+    standUnequipAllTools()
+    task.wait(0.1)
+    local equipped = nil
+    for _, item in pairs(player.Backpack:GetChildren()) do
+        if item.Name == RIB_NAME and item:IsA("Tool") and not equipped then
+            item.Parent = chr
+            equipped = item
+        end
+    end
+    task.wait(0.1)
+    for _, item in pairs(chr:GetChildren()) do
+        if item.Name == RIB_NAME and item:IsA("Tool") and item ~= equipped then
+            item.Parent = player.Backpack
+        end
+    end
+    return equipped or chr:FindFirstChild(RIB_NAME)
+end
+
+local function useOneRib()
+    local before = countRibs()
+    desummonStand()
+    local rib = holdOneRib()
+    if not rib then return false end
+    pcall(function() rib:Activate() end)
+    task.wait(0.15)
+    pcall(function()
+        getStandRemoteEvent():FireServer("EndDialogue", {
+            NPC = RIB_NAME,
+            Dialogue = "Dialogue2",
+            Option = "Option1",
+        })
+    end)
+    local t0 = tick()
+    repeat task.wait(0.2) until countRibs() < before or tick() - t0 > 3
+    standUnequipAllTools()
+    task.wait(0.2)
+    desummonStand()
+    return true
+end
+
+local function runRibFarm()
+    local worthinessVal = player:FindFirstChild("CharacterSkillTree")
+        and player.CharacterSkillTree:FindFirstChild("Worthiness")
+    if worthinessVal and not worthinessVal.Value then
+        local rf = getStandCharacter():FindFirstChild("RemoteFunction")
+        if rf then
+            pcall(function()
+                rf:InvokeServer("LearnSkill", { Skill = "Worthiness", SkillTreeType = "Character" })
+            end)
+        end
+        task.wait(0.35)
+    end
+
+    while ribFarmRunning do
+        task.wait(0.2)
+
+        if countRibs() <= 0 then
+            Window:Notify("Rib Farm", "No Rib Cages left! Auto-collecting...", 3)
+            local collected = collectRibsFromMap()
+            if collected then
+                continue
+            else
+                Window:Notify("Rib Farm", "No items on map, waiting for spawn...", 3)
+                task.wait(5)
+                continue
+            end
+        end
+
+        if not useOneRib() then
+            Window:Notify("Rib Farm", "Failed to use Rib Cage. Stopping.", 3)
+            ribFarmRunning = false
+            break
+        end
+
+        task.wait(0.3)
+
+        if countRibs() <= 0 then
+            task.wait(0.5)
+            standUnequipAllTools()
+            desummonStand()
+            Window:Notify("Rib Farm", "All Rib Cages used! Auto-collecting...", 3)
+            local collected = collectRibsFromMap()
+            if collected then
+                continue
+            else
+                Window:Notify("Rib Farm", "No items on map, waiting for spawn...", 3)
+                task.wait(5)
+                continue
+            end
+        end
+    end
+end
+
+StandFarmLeft = StandFarmTab:Section("Stand Selection", "Left", "sword")
+StandFarmRight = StandFarmTab:Section("Rib Farm", "Right", "bone")
+
+local standOptions = {
+    "Whitesnake", "White Album", "King Crimson", "The World", "Star Platinum",
+    "Crazy Diamond", "Gold Experience", "Killer Queen", "Magician's Red",
+    "Purple Haze", "Sticky Fingers", "Mr. President", "Aerosmith", "Cream",
+    "Beach Boy", "Red Hot Chili Pepper", "The Hand", "Anubis", "Stone Free",
+    "Six Pistols", "Hermit Purple", "Hierophant Green", "Silver Chariot",
+    "Soft & Wet", "The World Alternate Universe", "Scary Monsters", "Tusk ACT 1", "D4C",
+}
+
+StandFarmLeft:MultiDropdown("Stands to Farm", standOptions, {}, function(options)
+    table.clear(selectedStands)
+    for _, opt in ipairs(options) do
+        selectedStands[opt] = true
+    end
+end, true)
+
+StandFarmLeft:Toggle("Stop on Shinys", false, function(state)
+    stopOnShiny = state
+end)
+
+StandFarmLeft:Toggle("Auto Collect Arrow/Roka", false, function(state)
+    autoCollectArrowRoka = state
+    if state then
+        Window:Notify("Stand Farm", "Auto Collect Arrow/Roka enabled.", 3)
+    else
+        Window:Notify("Stand Farm", "Auto Collect Arrow/Roka disabled.", 3)
+    end
+end)
+
+StandFarmLeft:Toggle("Auto Swap Empty Stand Slot", false, function(state)
+    swapSlotOnDesired = state
+    if state then
+        Window:Notify("Stand Farm", "Make sure you have Empty slot(s).", 3)
+    end
+end)
+
+StandFarmLeft:Toggle("Enable Stand Farm", false, function(state)
+    if state then
+        if (getgenv()._MethionItemFarmRunning and getgenv()._MethionItemFarmRunning() or false) then
+            Window:Notify("Stand Farm", "Item Farm is running! Disable it first.", 3)
+            return
+        end
+        if (getgenv()._MethionPrestigeRunning and getgenv()._MethionPrestigeRunning() or false) then
+            Window:Notify("Stand Farm", "Auto Storyline is running! Disable it first.", 3)
+            return
+        end
+        if getgenv().QuestFarmEnabled or getgenv().NPCFarmEnabled then
+            Window:Notify("Stand Farm", "Quest Farm is running! Disable it first.", 3)
+            return
+        end
+        if ribFarmRunning then
+            Window:Notify("Stand Farm", "Rib Farm is running! Disable it first.", 3)
+            return
+        end
+    end
+    standFarmEnabled = state
+    if state then
+        task.spawn(startStandFarm)
+        Window:Notify("Stand Farm", "Started!", 3)
+    else
+        Window:Notify("Stand Farm", "Stopped.", 3)
+    end
+end)
+
+StandFarmRight:Paragraph("Rib Farm Info", Color3.fromRGB(140, 140, 140))
+StandFarmRight:Paragraph("Uses all Rib Cages one by one. Good for getting rib stands without Stand Farm mode.", Color3.fromRGB(140, 140, 140))
+
+StandFarmRight:Toggle("Enable Rib Farm", false, function(state)
+    if state then
+        if (getgenv()._MethionItemFarmRunning and getgenv()._MethionItemFarmRunning() or false) then
+            Window:Notify("Rib Farm", "Item Farm is running! Disable it first.", 3)
+            return
+        end
+        if standFarmEnabled or standFarmBusy then
+            Window:Notify("Rib Farm", "Stand Farm is running! Disable it first.", 3)
+            return
+        end
+        if (getgenv()._MethionPrestigeRunning and getgenv()._MethionPrestigeRunning() or false) then
+            Window:Notify("Rib Farm", "Auto Storyline is running! Disable it first.", 3)
+            return
+        end
+        if getgenv().QuestFarmEnabled or getgenv().NPCFarmEnabled then
+            Window:Notify("Rib Farm", "Quest Farm is running! Disable it first.", 3)
+            return
+        end
+    end
+    ribFarmRunning = state
+    if state then
+        task.spawn(runRibFarm)
+        Window:Notify("Rib Farm", "Started!", 3)
+    else
+        Window:Notify("Rib Farm", "Stopped.", 3)
+    end
+end)
+end
